@@ -23,5 +23,6 @@ dist/
 .venv/
 venv/
 
-# --- Log di debug generati da MameCommander a runtime ---
+# --- Log di debug e cache generati da MameCommander a runtime ---
 MameCommander_debug.log
+MameCommander.db

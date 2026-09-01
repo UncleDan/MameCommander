@@ -11,9 +11,17 @@ eseguibile monolitico unico (nessuna installazione, nessuna DLL esterna).
 3. Chiede a `mame.exe` stesso, tramite `-verifyroms`, quali romset sono
    integri.
 4. Chiede a `mame.exe`, tramite `-listxml`, nome completo, se e' un BIOS e
-   se e' realmente eseguibile (esclude BIOS e slot/device).
-5. Mostra solo i giochi realmente avviabili, con il nome completo, in una
-   lista navigabile con le frecce, ricerca digitando, avvio con Invio.
+   se e' realmente eseguibile (esclude BIOS e slot/device), e rileva la
+   versione di MAME installata.
+5. Mostra solo i giochi realmente avviabili, con il nome completo e la
+   versione di MAME nella barra del titolo, in una lista navigabile con
+   le frecce, ricerca digitando, avvio con Invio.
+6. Salva il risultato in un database SQLite (`MameCommander.db`, nella
+   stessa cartella dell'eseguibile): agli avvii successivi lo usa
+   direttamente, senza richiamare `mame.exe` (avvio istantaneo). Se il
+   file non esiste, viene creato automaticamente dopo la prima scansione.
+   Da dentro l'app, **F5** rifa' la scansione completa e riscrive il
+   database (utile dopo aver aggiunto nuove ROM).
 
 ## Uso locale (senza compilare)
 
@@ -115,9 +123,20 @@ autonomo.
   di MAME (es. MAME 0.78b non stampa una riga per romset, ma un riepilogo
   a conteggio, e usa il tag XML `<game>` invece di `<machine>`).
   MameCommander gestisce automaticamente i formati piu' comuni.
-- Ad ogni scansione viene scritto `MameCommander_debug.log` nella stessa
-  cartella dell'eseguibile, con il comando esatto e l'output grezzo di
-  ogni chiamata a `mame.exe`. Utile per capire perche' una ROM non viene
+- **Log di debug**: per diagnosticare problemi, avvia con il parametro
+  `-debug` (es. `MameCommander.exe -debug`): verra' scritto
+  `MameCommander_debug.log`, nella stessa cartella dell'eseguibile, con
+  il comando esatto e l'output grezzo di ogni chiamata a `mame.exe`.
+  Senza questo parametro nessun log viene creato. Il file viene
+  sovrascritto ad ogni scansione ed e' escluso dal repository tramite
+  `.gitignore`.
+- **Database cache (`MameCommander.db`)**: viene cercato/creato nella
+  stessa cartella dell'eseguibile. Se presente, viene usato direttamente
+  per un avvio istantaneo (senza richiamare `mame.exe`); se assente,
+  viene creato dopo la prima scansione completa. Premi **F5** dentro
+  l'app per rifare la scansione e riscrivere il database (ad es. dopo
+  aver aggiunto nuove ROM, o cambiato versione di `mame.exe`). Anche
+  questo file e' escluso dal repository tramite `.gitignore`.
   rilevata come avviabile. Il file viene sovrascritto ad ogni scansione
   (non serve cancellarlo a mano) ed e' escluso dal repository tramite
   `.gitignore`.

@@ -13,7 +13,16 @@ Frontend testuale monolitico per MAME:
          e qual e' il nome completo ("-listxml")
   4. Mostra in un'interfaccia a pannello singolo, stile Norton Commander,
      solo i giochi realmente avviabili (non BIOS, non device, romset OK),
-     con il nome completo.
+     con il nome completo e la versione di MAME rilevata.
+  5. Salva i risultati in un database SQLite (MameCommander.db, nella
+     stessa cartella dell'eseguibile) per gli avvii successivi: se il
+     file esiste viene usato direttamente (avvio istantaneo, senza
+     richiamare mame.exe), altrimenti viene creato. Da dentro l'app, F5
+     rifà la scansione completa e riscrive il database.
+
+Debug: avviare con il parametro "-debug" per generare un log dettagliato
+(MameCommander_debug.log) di ogni chiamata a mame.exe. Senza questo
+parametro nessun log viene creato.
 
 Pensato per essere compilato con PyInstaller in un unico eseguibile:
     pyinstaller --onefile --console --name MameCommander MameCommander.py
@@ -27,11 +36,12 @@ APP_VERSION = "1.0"
 import curses
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Tuple
 
 import xml.etree.ElementTree as ET
 
@@ -52,6 +62,11 @@ def app_dir() -> str:
 
 APP_DIR = app_dir()
 MAME_EXE = os.path.join(APP_DIR, "mame.exe")
+DB_PATH = os.path.join(APP_DIR, f"{APP_NAME}.db")  # cache dei giochi, stessa cartella dell'eseguibile
+
+# Il log di debug viene creato SOLO se l'app e' avviata con "-debug" (o
+# "--debug"): normalmente non scrive nulla su disco.
+DEBUG_ENABLED = any(a.lower() in ("-debug", "--debug") for a in sys.argv[1:])
 
 # Cartella ROMS: proviamo alcune varianti comuni di nome
 ROMS_DIR_CANDIDATES = ["roms", "ROMS", "ROM", "rom"]
@@ -96,12 +111,15 @@ class Game:
 # Utility: esecuzione di mame.exe a lotti, con callback di progresso
 # --------------------------------------------------------------------------
 
-DEBUG_LOG_PATH = os.path.join(APP_DIR, "MameCommander_debug.log")
+DEBUG_LOG_PATH = os.path.join(APP_DIR, f"{APP_NAME}_debug.log")
 
 
 def _log_debug(section: str, command: List[str], output: str):
     """Scrive un log dettagliato di ogni chiamata a mame.exe, per diagnosticare
-    problemi di parsing con versioni di MAME dal comportamento inatteso."""
+    problemi di parsing con versioni di MAME dal comportamento inatteso.
+    Attivo SOLO se l'app e' stata avviata con il parametro -debug."""
+    if not DEBUG_ENABLED:
+        return
     try:
         with open(DEBUG_LOG_PATH, "a", encoding="utf-8", errors="ignore") as f:
             f.write("=" * 70 + "\n")
@@ -115,6 +133,8 @@ def _log_debug(section: str, command: List[str], output: str):
 
 
 def reset_debug_log():
+    if not DEBUG_ENABLED:
+        return
     try:
         if os.path.exists(DEBUG_LOG_PATH):
             os.remove(DEBUG_LOG_PATH)
@@ -210,6 +230,23 @@ def verify_roms(rom_names: List[str], progress_cb=None) -> Dict[str, str]:
 # di TUTTI i romset del lotto.
 _ELEMENT_RE = re.compile(r"<(machine|game)\b.*?</\1\s*>", re.DOTALL | re.IGNORECASE)
 
+# L'attributo "build" sulla radice <mame build="0.78b (Sep 1 2003)" ...>
+# e' presente in -listxml praticamente in ogni versione di MAME: lo
+# usiamo per mostrare la versione nella barra del titolo, senza bisogno
+# di una chiamata separata.
+_BUILD_RE = re.compile(r'build\s*=\s*"([^"]*)"', re.IGNORECASE)
+
+
+def get_mame_version_via_cli() -> Optional[str]:
+    """Fallback: chiede la versione direttamente con 'mame.exe -version'.
+    Usato solo se non e' stato possibile ricavarla dall'output di -listxml."""
+    out = _run_mame(["-version"])
+    for line in out.splitlines():
+        line = line.strip()
+        if line:
+            return line
+    return None
+
 
 def _sanitize_entities(fragment: str) -> str:
     """Corregge il bug piu' comune delle vecchie liste XML di MAME: un
@@ -218,21 +255,27 @@ def _sanitize_entities(fragment: str) -> str:
     return re.sub(r"&(?!amp;|lt;|gt;|apos;|quot;|#\d+;|#x[0-9a-fA-F]+;)", "&amp;", fragment)
 
 
-def fetch_machine_info(rom_names: List[str], progress_cb=None) -> Dict[str, Game]:
+def fetch_machine_info(rom_names: List[str], progress_cb=None) -> Tuple[Dict[str, Game], Optional[str]]:
     """
     Usa 'mame.exe -listxml <nome>' UNA VOLTA PER OGNI ROM, per lo stesso
     motivo di compatibilita' spiegato in verify_roms(): le versioni vecchie
     di MAME non accettano piu' nomi sulla stessa riga di comando.
     Ottiene: descrizione completa, se e' un BIOS, se e' un device, se e'
-    eseguibile.
+    eseguibile, e la versione di MAME (dall'attributo "build").
     """
     games: Dict[str, Game] = {}
+    mame_version: Optional[str] = None
     total = len(rom_names)
     total_found = 0
     for i, name in enumerate(rom_names, 1):
         if progress_cb:
             progress_cb(f"Lettura informazioni MAME: {name} ({i}/{total})")
         out = _run_mame(["-listxml", name])
+
+        if mame_version is None:
+            bm = _BUILD_RE.search(out)
+            if bm and bm.group(1).strip():
+                mame_version = bm.group(1).strip()
 
         for m in _ELEMENT_RE.finditer(out):
             fragment = m.group(0)
@@ -269,9 +312,10 @@ def fetch_machine_info(rom_names: List[str], progress_cb=None) -> Dict[str, Game
     _log_debug(
         "Riepilogo parsing -listxml",
         ["(parsing interno)"],
-        f"Blocchi <machine>/<game> trovati e interpretati in totale: {total_found} su {total} rom richieste.",
+        f"Blocchi <machine>/<game> trovati e interpretati in totale: {total_found} su {total} rom richieste.\n"
+        f"Versione MAME rilevata: {mame_version}",
     )
-    return games
+    return games, mame_version
 
 
 def scan_rom_files(roms_dir: str) -> List[str]:
@@ -284,8 +328,9 @@ def scan_rom_files(roms_dir: str) -> List[str]:
     return sorted(set(names))
 
 
-def build_game_list(rom_names: List[str], progress_cb=None) -> List[Game]:
-    """Pipeline completa: verifica integrita' + info da MAME, poi filtro."""
+def build_game_list(rom_names: List[str], progress_cb=None) -> Tuple[List[Game], Optional[str]]:
+    """Pipeline completa: verifica integrita' + info da MAME, poi filtro.
+    Ritorna (giochi_avviabili, versione_mame)."""
     reset_debug_log()
     _log_debug("Avvio scansione", ["(riepilogo)"], f"ROM trovate nella cartella: {len(rom_names)}\n{rom_names}")
 
@@ -307,9 +352,11 @@ def build_game_list(rom_names: List[str], progress_cb=None) -> List[Game]:
             "formato di output di questa versione di MAME e' diverso dal "
             "previsto.",
         )
-        return []
+        return [], None
 
-    infos = fetch_machine_info(ok_names, progress_cb)
+    infos, mame_version = fetch_machine_info(ok_names, progress_cb)
+    if not mame_version:
+        mame_version = get_mame_version_via_cli()
     _log_debug(
         "Riepilogo -listxml",
         ["(riepilogo)"],
@@ -334,7 +381,68 @@ def build_game_list(rom_names: List[str], progress_cb=None) -> List[Game]:
     )
 
     playable.sort(key=lambda g: g.display_name.lower())
-    return playable
+    return playable, mame_version
+
+
+# --------------------------------------------------------------------------
+# Cache su SQLite (MameCommander.db, nella cartella dell'eseguibile)
+# --------------------------------------------------------------------------
+
+def load_cache_from_db(db_path: str) -> Optional[Tuple[List[Game], str]]:
+    """Se il database esiste ed e' leggibile, ritorna (giochi, versione_mame).
+    Altrimenti ritorna None (nessuna cache utilizzabile)."""
+    if not os.path.isfile(db_path):
+        return None
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            cur = conn.cursor()
+            cur.execute("SELECT name, description FROM games ORDER BY description COLLATE NOCASE")
+            rows = cur.fetchall()
+            games = [
+                Game(name=n, description=d, is_bios=False, is_device=False, runnable=True, rom_status="good")
+                for n, d in rows
+            ]
+            mame_version = "sconosciuta"
+            try:
+                cur.execute("SELECT value FROM meta WHERE key = 'mame_version'")
+                row = cur.fetchone()
+                if row and row[0]:
+                    mame_version = row[0]
+            except sqlite3.Error:
+                pass
+            return games, mame_version
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+
+
+def save_cache_to_db(db_path: str, games: List[Game], mame_version: str):
+    """Riscrive interamente MameCommander.db con l'elenco dei giochi avviabili
+    e la versione di MAME rilevata. Non blocca l'app in caso di errore."""
+    try:
+        if os.path.exists(db_path):
+            os.remove(db_path)
+        conn = sqlite3.connect(db_path)
+        try:
+            cur = conn.cursor()
+            cur.execute("CREATE TABLE games (name TEXT PRIMARY KEY, description TEXT NOT NULL)")
+            cur.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
+            cur.executemany(
+                "INSERT INTO games (name, description) VALUES (?, ?)",
+                [(g.name, g.description) for g in games],
+            )
+            cur.execute("INSERT INTO meta (key, value) VALUES ('mame_version', ?)", (mame_version or "sconosciuta",))
+            cur.execute(
+                "INSERT INTO meta (key, value) VALUES ('updated_at', ?)",
+                (time.strftime("%Y-%m-%d %H:%M:%S"),),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        pass  # la cache e' un extra: se fallisce, l'app continua a funzionare
 
 
 # --------------------------------------------------------------------------
@@ -381,9 +489,10 @@ def draw_progress(stdscr, message: str):
 
 
 class App:
-    def __init__(self, stdscr, games: List[Game]):
+    def __init__(self, stdscr, games: List[Game], mame_version: str = "sconosciuta"):
         self.stdscr = stdscr
         self.games = games
+        self.mame_version = mame_version
         self.filtered = games
         self.selected = 0
         self.top = 0
@@ -399,7 +508,7 @@ class App:
         stdscr.bkgd(" ", curses.color_pair(COLOR_NORMAL))
 
         # Titolo
-        title = f" {APP_NAME} {APP_VERSION} - {len(self.filtered)} giochi disponibili "
+        title = f" {APP_NAME} {APP_VERSION} - MAME {self.mame_version} - {len(self.filtered)} giochi disponibili "
         stdscr.attron(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
         stdscr.addstr(0, 0, title.ljust(w)[: w - 1])
         stdscr.attroff(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
@@ -427,11 +536,11 @@ class App:
             stdscr.addstr(y, 0, text, attr)
 
         # Barra di stato
-        status = f" Cerca: {self.search}" if self.search else " Digita per cercare, F5 aggiorna"
+        status = f" Cerca: {self.search}" if self.search else " Digita per cercare, F5 aggiorna il database"
         stdscr.addstr(h - 2, 0, status.ljust(w)[: w - 1], curses.color_pair(COLOR_NORMAL))
 
         # Barra tasti funzione
-        funckeys = " F1 Aiuto  F5 Aggiorna  Invio Avvia  F10/Esc Esci "
+        funckeys = " F1 Aiuto  F5 Aggiorna DB  Invio Avvia  F10/Esc Esci "
         stdscr.addstr(h - 1, 0, funckeys.ljust(w)[: w - 1], curses.color_pair(COLOR_FUNCKEYS))
 
         stdscr.refresh()
@@ -471,8 +580,15 @@ class App:
         except Exception as exc:
             print(f"Errore avviando {game.name}: {exc}")
             input("Premi invio per continuare...")
-        self.stdscr.clear()
+        # Ripristiniamo la modalita' curses PRIMA di ridisegnare (l'ordine
+        # inverso lascia a volte lo schermo bloccato sul prompt originale).
         curses.reset_prog_mode()
+        # La console potrebbe ancora mostrare il testo di prima di endwin()
+        # (curses non sa che nel frattempo e' stato eseguito un altro
+        # programma): clearok forza il PROSSIMO refresh a ridisegnare tutto
+        # da zero, cosi' il menu ricompare sempre, invece di restare sul
+        # prompt "avvio in corso".
+        self.stdscr.clearok(True)
         curses.curs_set(0)
         self.stdscr.refresh()
 
@@ -486,8 +602,11 @@ class App:
             "Digita lettere: filtra i giochi per nome",
             "Backspace: cancella ricerca",
             "Invio: avvia il gioco selezionato",
-            "F5: rifai la scansione di ROMS e riverifica",
+            "F5: rifai la scansione completa e aggiorna MameCommander.db",
             "F10 / Esc: esci",
+            "",
+            f"Versione MAME rilevata: {self.mame_version}",
+            "Avvia con il parametro -debug per generare un log dettagliato",
             "",
             "Premi un tasto per tornare...",
         ]
@@ -542,15 +661,25 @@ class App:
 # Avvio / pipeline principale
 # --------------------------------------------------------------------------
 
-def load_games_with_ui(stdscr, roms_dir: str) -> List[Game]:
+def scan_and_cache(stdscr, roms_dir: str) -> Tuple[List[Game], str]:
+    """Fa una scansione completa via mame.exe (lenta) e riscrive la cache
+    MameCommander.db con il risultato. Ritorna (giochi, versione_mame)."""
     def progress_cb(msg):
         draw_progress(stdscr, msg)
 
     draw_progress(stdscr, "Scansione cartella ROMS...")
     rom_names = scan_rom_files(roms_dir)
     if not rom_names:
-        return []
-    return build_game_list(rom_names, progress_cb)
+        return [], "sconosciuta"
+
+    games, mame_version = build_game_list(rom_names, progress_cb)
+    mame_version = mame_version or "sconosciuta"
+    if games:
+        # Non salviamo una scansione vuota: meglio ritentare al prossimo
+        # avvio piuttosto che bloccare l'utente su una cache vuota.
+        draw_progress(stdscr, "Aggiornamento database...")
+        save_cache_to_db(DB_PATH, games, mame_version)
+    return games, mame_version
 
 
 def main(stdscr):
@@ -582,8 +711,17 @@ def main(stdscr):
         )
         return
 
+    # 3. Se esiste gia' MameCommander.db, usiamolo (avvio istantaneo, senza
+    #    richiamare mame.exe). Altrimenti facciamo la scansione completa e
+    #    lo creiamo.
+    draw_progress(stdscr, "Verifica database...")
+    cached = load_cache_from_db(DB_PATH)
+    if cached is not None and cached[0]:
+        games, mame_version = cached
+    else:
+        games, mame_version = scan_and_cache(stdscr, roms_dir)
+
     while True:
-        games = load_games_with_ui(stdscr, roms_dir)
         if not games:
             draw_error_screen(
                 stdscr,
@@ -595,11 +733,13 @@ def main(stdscr):
             )
             return
 
-        app = App(stdscr, games)
+        app = App(stdscr, games, mame_version)
         action = app.run()
         if action == "quit":
             return
-        # action == "refresh": ricomincia il ciclo (rilegge tutto)
+        # action == "refresh": F5 -> rifai la scansione completa e
+        # riscrivi MameCommander.db, poi ridisegna il menu con i nuovi dati.
+        games, mame_version = scan_and_cache(stdscr, roms_dir)
 
 
 if __name__ == "__main__":
