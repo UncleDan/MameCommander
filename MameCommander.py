@@ -546,11 +546,11 @@ class App:
             stdscr.addstr(y, 0, text, attr)
 
         # Barra di stato
-        status = f" Cerca: {self.search}" if self.search else " Digita per cercare, F5 aggiorna il database"
+        status = f" Cerca: {self.search}" if self.search else " Digita per cercare, F5 nuovi giochi, F6 ricostruisci DB"
         stdscr.addstr(h - 2, 0, status.ljust(w)[: w - 1], curses.color_pair(COLOR_NORMAL))
 
         # Barra tasti funzione
-        funckeys = " F1 Aiuto  F5 Aggiorna DB  Invio Avvia  F10/Esc Esci "
+        funckeys = " F1 Aiuto  F5 Nuovi giochi  F6 Ricostruisci  Invio Avvia  F10/Esc Esci "
         stdscr.addstr(h - 1, 0, funckeys.ljust(w)[: w - 1], curses.color_pair(COLOR_FUNCKEYS))
 
         stdscr.refresh()
@@ -618,7 +618,8 @@ class App:
             "Digita lettere: filtra i giochi per nome",
             "Backspace: cancella ricerca",
             "Invio: avvia il gioco selezionato",
-            "F5: rifai la scansione completa e aggiorna MameCommander.db",
+            "F5: cerca solo le ROM nuove (non ritocca quelle gia' in DB)",
+            "F6: ricostruisce l'intero database da zero",
             "F10 / Esc: esci",
             "",
             f"Versione MAME rilevata: {self.mame_version}",
@@ -662,7 +663,9 @@ class App:
             elif ch == curses.KEY_F1:
                 self.show_help()
             elif ch == curses.KEY_F5:
-                return "refresh"
+                return "refresh_new"
+            elif ch == curses.KEY_F6:
+                return "refresh_full"
             elif ch in (curses.KEY_F10, 27):  # F10 o Esc
                 return "quit"
             elif ch in (curses.KEY_BACKSPACE, 127, 8):
@@ -677,13 +680,28 @@ class App:
 # Avvio / pipeline principale
 # --------------------------------------------------------------------------
 
+def draw_info_screen(stdscr, lines: List[str]):
+    """Come draw_error_screen ma con i colori normali: per messaggi
+    informativi (es. esito di un aggiornamento), non errori."""
+    stdscr.clear()
+    stdscr.bkgd(" ", curses.color_pair(COLOR_NORMAL))
+    h, w = stdscr.getmaxyx()
+    for i, line in enumerate(lines):
+        if i + 2 < h:
+            stdscr.addstr(2 + i, 2, line[: w - 4], curses.color_pair(COLOR_NORMAL))
+    stdscr.addstr(h - 2, 2, "Premi un tasto per continuare...", curses.color_pair(COLOR_NORMAL))
+    stdscr.refresh()
+    stdscr.getch()
+
+
 def scan_and_cache(stdscr, roms_dir: str) -> Tuple[List[Game], str]:
-    """Fa una scansione completa via mame.exe (lenta) e riscrive la cache
-    MameCommander.db con il risultato. Ritorna (giochi, versione_mame)."""
+    """RICOSTRUZIONE COMPLETA (tasto F6): rifa' la scansione via mame.exe
+    di TUTTE le ROM presenti in ROMS e riscrive da zero la cache
+    MameCommander.db. Ritorna (giochi, versione_mame)."""
     def progress_cb(msg):
         draw_progress(stdscr, msg)
 
-    draw_progress(stdscr, "Scansione cartella ROMS...")
+    draw_progress(stdscr, "Scansione completa cartella ROMS...")
     rom_names = scan_rom_files(roms_dir)
     if not rom_names:
         return [], "sconosciuta"
@@ -696,6 +714,44 @@ def scan_and_cache(stdscr, roms_dir: str) -> Tuple[List[Game], str]:
         draw_progress(stdscr, "Aggiornamento database...")
         save_cache_to_db(DB_PATH, games, mame_version)
     return games, mame_version
+
+
+def scan_new_only(
+    stdscr, roms_dir: str, existing_games: List[Game], existing_version: str
+) -> Tuple[List[Game], str, int]:
+    """RICERCA SOLO NUOVI GIOCHI (tasto F5): confronta i file in ROMS con
+    quelli gia' presenti nel database e interroga mame.exe SOLO per i nomi
+    nuovi, senza ritoccare le righe gia' verificate. Molto piu' veloce di
+    una scansione completa quando si aggiungono poche ROM alla volta.
+
+    ATTENZIONE (accettato esplicitamente dall'utente): questa modalita' non
+    si accorge delle ROM rimosse dalla cartella ROMS, che restano in lista
+    finche' non si fa una ricostruzione completa (F6).
+
+    Ritorna (giochi_totali, versione_mame, numero_nuovi_trovati).
+    """
+    draw_progress(stdscr, "Ricerca nuove ROM...")
+    existing_names = {g.name for g in existing_games}
+    rom_names = scan_rom_files(roms_dir)
+    new_names = [n for n in rom_names if n not in existing_names]
+
+    if not new_names:
+        return existing_games, existing_version, 0
+
+    def progress_cb(msg):
+        draw_progress(stdscr, msg)
+
+    new_games, mame_version = build_game_list(new_names, progress_cb)
+    mame_version = mame_version or existing_version or "sconosciuta"
+
+    if not new_games:
+        return existing_games, existing_version, 0
+
+    merged = existing_games + new_games
+    merged.sort(key=lambda g: g.display_name.lower())
+    draw_progress(stdscr, "Aggiornamento database...")
+    save_cache_to_db(DB_PATH, merged, mame_version)
+    return merged, mame_version, len(new_games)
 
 
 def main(stdscr):
@@ -751,11 +807,31 @@ def main(stdscr):
 
         app = App(stdscr, games, mame_version)
         action = app.run()
+
         if action == "quit":
             return
-        # action == "refresh": F5 -> rifai la scansione completa e
-        # riscrivi MameCommander.db, poi ridisegna il menu con i nuovi dati.
-        games, mame_version = scan_and_cache(stdscr, roms_dir)
+
+        elif action == "refresh_new":
+            games, mame_version, new_count = scan_new_only(stdscr, roms_dir, games, mame_version)
+            if new_count > 0:
+                draw_info_screen(
+                    stdscr,
+                    [
+                        f"Trovati {new_count} nuovi giochi.",
+                        "Database aggiornato (le voci gia' presenti non sono state ritoccate).",
+                    ],
+                )
+            else:
+                draw_info_screen(
+                    stdscr,
+                    [
+                        "Nessun nuovo gioco trovato.",
+                        "La lista era gia' aggiornata.",
+                    ],
+                )
+
+        elif action == "refresh_full":
+            games, mame_version = scan_and_cache(stdscr, roms_dir)
 
 
 if __name__ == "__main__":

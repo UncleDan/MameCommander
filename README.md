@@ -20,8 +20,15 @@ eseguibile monolitico unico (nessuna installazione, nessuna DLL esterna).
    stessa cartella dell'eseguibile): agli avvii successivi lo usa
    direttamente, senza richiamare `mame.exe` (avvio istantaneo). Se il
    file non esiste, viene creato automaticamente dopo la prima scansione.
-   Da dentro l'app, **F5** rifa' la scansione completa e riscrive il
-   database (utile dopo aver aggiunto nuove ROM).
+   Da dentro l'app sono disponibili due modalita' di aggiornamento:
+   - **F5 — Nuovi giochi**: cerca solo le ROM non ancora presenti nel
+     database e le aggiunge, senza ritoccare quelle gia' verificate.
+     Molto piu' veloce, ideale dopo aver aggiunto poche ROM. Non si
+     accorge delle ROM rimosse dalla cartella (restano in lista finche'
+     non si fa una ricostruzione completa).
+   - **F6 — Ricostruisci**: rifa' la scansione completa di tutte le ROM
+     e riscrive il database da zero (anche le ROM rimosse spariscono
+     dalla lista).
 
 ## Uso locale (senza compilare)
 
@@ -133,10 +140,8 @@ autonomo.
 - **Database cache (`MameCommander.db`)**: viene cercato/creato nella
   stessa cartella dell'eseguibile. Se presente, viene usato direttamente
   per un avvio istantaneo (senza richiamare `mame.exe`); se assente,
-  viene creato dopo la prima scansione completa. Premi **F5** dentro
-  l'app per rifare la scansione e riscrivere il database (ad es. dopo
-  aver aggiunto nuove ROM, o cambiato versione di `mame.exe`). Anche
-  questo file e' escluso dal repository tramite `.gitignore`.
-  rilevata come avviabile. Il file viene sovrascritto ad ogni scansione
-  (non serve cancellarlo a mano) ed e' escluso dal repository tramite
-  `.gitignore`.
+  viene creato dopo la prima scansione completa. Da dentro l'app:
+  **F5** cerca solo le ROM nuove (veloce, non ritocca le voci gia'
+  presenti — non si accorge pero' delle ROM rimosse, che restano in
+  lista); **F6** ricostruisce l'intero database da zero. Anche questo
+  file e' escluso dal repository tramite `.gitignore`.
