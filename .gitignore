@@ -13,6 +13,7 @@
 /whatsnew.txt
 /whatsold.txt
 /xml2info.exe
+/files.zip
 
 # --- Python / PyInstaller (build di MameCommander) ---
 __pycache__/

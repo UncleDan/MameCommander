@@ -234,16 +234,26 @@ _ELEMENT_RE = re.compile(r"<(machine|game)\b.*?</\1\s*>", re.DOTALL | re.IGNOREC
 # e' presente in -listxml praticamente in ogni versione di MAME: lo
 # usiamo per mostrare la versione nella barra del titolo, senza bisogno
 # di una chiamata separata.
-_BUILD_RE = re.compile(r'build\s*=\s*"([^"]*)"', re.IGNORECASE)
+_BUILD_RE = re.compile(r'''build\s*=\s*["']([^"']*)["']''', re.IGNORECASE)
+
+
+def _looks_like_error(text: str) -> bool:
+    """Alcune versioni di MAME (es. 0.78b) non supportano '-version' e
+    rispondono con un messaggio di errore ("error: unknown option..."):
+    non va mai mostrato come se fosse la versione."""
+    t = text.strip().lower()
+    return t.startswith("error") or "unknown option" in t or "while parsing" in t
 
 
 def get_mame_version_via_cli() -> Optional[str]:
     """Fallback: chiede la versione direttamente con 'mame.exe -version'.
-    Usato solo se non e' stato possibile ricavarla dall'output di -listxml."""
+    Usato solo se non e' stato possibile ricavarla dall'output di -listxml.
+    Se anche questo comando non e' supportato (versioni molto vecchie),
+    ritorna None invece di mostrare il messaggio di errore come versione."""
     out = _run_mame(["-version"])
     for line in out.splitlines():
         line = line.strip()
-        if line:
+        if line and not _looks_like_error(line):
             return line
     return None
 
@@ -564,6 +574,12 @@ class App:
         game = self.filtered[self.selected]
         curses.def_prog_mode()
         curses.endwin()
+        # Sovrascriviamo il testo residuo sulla console originale (es. il
+        # messaggio "Avvio MameCommander..." di run_cmd.bat/run_ps.ps1) con
+        # un messaggio esplicito: resta visibile finche' il gioco e' aperto,
+        # cosi' e' chiaro cosa sta girando e si evita di rilanciarne un altro
+        # per errore mentre si e' ancora dentro la partita.
+        print(f"{APP_NAME}: lancio ROM '{game.name}'...")
         try:
             # Lanciamo mame.exe in una console Windows NUOVA e separata da
             # quella del frontend. Necessario perche' PDCurses (usato da
