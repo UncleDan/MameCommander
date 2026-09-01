@@ -13,3 +13,15 @@
 /whatsnew.txt
 /whatsold.txt
 /xml2info.exe
+
+# --- Python / PyInstaller (build di MameCommander) ---
+__pycache__/
+*.pyc
+build/
+dist/
+*.spec
+.venv/
+venv/
+
+# --- Log di debug generati da MameCommander a runtime ---
+MameCommander_debug.log

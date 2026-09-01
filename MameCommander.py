@@ -16,7 +16,7 @@ Frontend testuale monolitico per MAME:
      con il nome completo.
 
 Pensato per essere compilato con PyInstaller in un unico eseguibile:
-    pyinstaller --onefile --console --name MameCommander mame_commander.py
+    pyinstaller --onefile --console --name MameCommander MameCommander.py
 
 Su Windows serve il pacchetto 'windows-curses' (vedi requirements.txt).
 """
@@ -96,7 +96,7 @@ class Game:
 # Utility: esecuzione di mame.exe a lotti, con callback di progresso
 # --------------------------------------------------------------------------
 
-DEBUG_LOG_PATH = os.path.join(APP_DIR, "mame_commander_debug.log")
+DEBUG_LOG_PATH = os.path.join(APP_DIR, "MameCommander_debug.log")
 
 
 def _log_debug(section: str, command: List[str], output: str):
@@ -456,7 +456,18 @@ class App:
         curses.def_prog_mode()
         curses.endwin()
         try:
-            subprocess.run([MAME_EXE, game.name], cwd=APP_DIR)
+            # Lanciamo mame.exe in una console Windows NUOVA e separata da
+            # quella del frontend. Necessario perche' PDCurses (usato da
+            # windows-curses) gestisce la console in un modo che, se
+            # mame.exe eredita lo stesso handle, causa su alcune versioni
+            # (es. 0.78b, DirectInput) l'errore:
+            #   "Unable to open the keyboard device. (error 32)"
+            # (sharing violation sull'handle della tastiera). Con una
+            # console dedicata, mame.exe puo' aprirla in esclusiva senza
+            # conflitti col processo padre.
+            creationflags = subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0
+            proc = subprocess.Popen([MAME_EXE, game.name], cwd=APP_DIR, creationflags=creationflags)
+            proc.wait()
         except Exception as exc:
             print(f"Errore avviando {game.name}: {exc}")
             input("Premi invio per continuare...")
