@@ -40,7 +40,6 @@ import xml.etree.ElementTree as ET
 # --------------------------------------------------------------------------
 
 ROM_EXTENSIONS = (".zip", ".7z")
-BATCH_SIZE = 150            # quante rom passare per volta a mame.exe -listxml/-verifyroms
 STATUS_OK = ("good", "best available")
 
 
@@ -123,11 +122,6 @@ def reset_debug_log():
         pass
 
 
-def _chunks(seq, size):
-    for i in range(0, len(seq), size):
-        yield seq[i:i + size]
-
-
 def _run_mame(args, progress_cb=None) -> str:
     """Esegue mame.exe con gli argomenti dati e ritorna lo stdout completo."""
     creationflags = 0
@@ -149,9 +143,13 @@ def _run_mame(args, progress_cb=None) -> str:
 
 def verify_roms(rom_names: List[str], progress_cb=None) -> Dict[str, str]:
     """
-    Usa 'mame.exe -verifyroms <nomi...>' a lotti.
-    Ritorna { nome_rom: stato_testuale }.
-    Righe tipiche prodotte da MAME:
+    Usa 'mame.exe -verifyroms <nome>' UNA VOLTA PER OGNI ROM.
+    Le versioni molto vecchie di MAME (es. 0.78b) non accettano piu' nomi
+    sulla stessa riga di comando: passandone diversi restituiscono
+    "error: duplicate gamename" e non verificano nulla. Chiamare mame.exe
+    un nome alla volta funziona con qualsiasi versione.
+
+    Ritorna { nome_rom: stato_testuale }. Righe tipiche prodotte da MAME:
         romset puckman is good
         romset achase [pacman] is best available
         romset foo is bad
@@ -165,11 +163,11 @@ def verify_roms(rom_names: List[str], progress_cb=None) -> Dict[str, str]:
     # Pattern di riserva, piu' permissivo, per formati leggermente diversi
     fallback_re = re.compile(r"^(\S+)\s*(?:\[[^\]]+\])?\s+is\s+(.+?)\.?\s*$", re.IGNORECASE)
 
-    batches = list(_chunks(rom_names, BATCH_SIZE))
-    for i, batch in enumerate(batches, 1):
+    total = len(rom_names)
+    for i, name in enumerate(rom_names, 1):
         if progress_cb:
-            progress_cb(f"Verifica ROM: lotto {i}/{len(batches)} ({len(batch)} rom)")
-        out = _run_mame(["-verifyroms"] + batch)
+            progress_cb(f"Verifica ROM: {name} ({i}/{total})")
+        out = _run_mame(["-verifyroms", name])
         for line in out.splitlines():
             line = line.strip()
             if not line:
@@ -178,8 +176,8 @@ def verify_roms(rom_names: List[str], progress_cb=None) -> Dict[str, str]:
             if not m:
                 m = fallback_re.match(line)
             if m:
-                name, status = m.group(1), m.group(2).strip().lower()
-                result[name] = status
+                found_name, status = m.group(1), m.group(2).strip().lower()
+                result[found_name] = status
     return result
 
 
@@ -200,17 +198,20 @@ def _sanitize_entities(fragment: str) -> str:
 
 def fetch_machine_info(rom_names: List[str], progress_cb=None) -> Dict[str, Game]:
     """
-    Usa 'mame.exe -listxml <nomi...>' a lotti per ottenere, per ciascun
-    nome: descrizione completa, se e' un BIOS, se e' un device, se e' eseguibile.
+    Usa 'mame.exe -listxml <nome>' UNA VOLTA PER OGNI ROM, per lo stesso
+    motivo di compatibilita' spiegato in verify_roms(): le versioni vecchie
+    di MAME non accettano piu' nomi sulla stessa riga di comando.
+    Ottiene: descrizione completa, se e' un BIOS, se e' un device, se e'
+    eseguibile.
     """
     games: Dict[str, Game] = {}
-    batches = list(_chunks(rom_names, BATCH_SIZE))
-    for i, batch in enumerate(batches, 1):
+    total = len(rom_names)
+    total_found = 0
+    for i, name in enumerate(rom_names, 1):
         if progress_cb:
-            progress_cb(f"Lettura informazioni MAME: lotto {i}/{len(batches)}")
-        out = _run_mame(["-listxml"] + batch)
+            progress_cb(f"Lettura informazioni MAME: {name} ({i}/{total})")
+        out = _run_mame(["-listxml", name])
 
-        found_in_batch = 0
         for m in _ELEMENT_RE.finditer(out):
             fragment = m.group(0)
             machine = None
@@ -220,11 +221,11 @@ def fetch_machine_info(rom_names: List[str], progress_cb=None) -> Dict[str, Game
                 try:
                     machine = ET.fromstring(_sanitize_entities(fragment))
                 except ET.ParseError:
-                    continue  # solo questo romset viene saltato, non l'intero lotto
+                    continue  # solo questo romset viene saltato
 
-            name = machine.get("name", "")
+            found_name = machine.get("name", "")
             desc_el = machine.find("description")
-            description = desc_el.text.strip() if desc_el is not None and desc_el.text else name
+            description = desc_el.text.strip() if desc_el is not None and desc_el.text else found_name
             # isbios/isdevice/runnable non esistevano nelle versioni piu'
             # vecchie di MAME: se l'attributo manca, il default e' "non lo e'".
             is_bios = machine.get("isbios", "no") == "yes"
@@ -234,20 +235,20 @@ def fetch_machine_info(rom_names: List[str], progress_cb=None) -> Dict[str, Game
             # isbios, i set BIOS hanno spesso "BIOS" nella descrizione.
             if not is_bios and "[BIOS]" in description.upper().replace(" ", ""):
                 is_bios = True
-            games[name] = Game(
-                name=name,
+            games[found_name] = Game(
+                name=found_name,
                 description=description,
                 is_bios=is_bios,
                 is_device=is_device,
                 runnable=runnable,
             )
-            found_in_batch += 1
+            total_found += 1
 
-        _log_debug(
-            "Riepilogo parsing -listxml",
-            ["(parsing interno)"],
-            f"Blocchi <machine>/<game> trovati e interpretati in questo lotto: {found_in_batch}",
-        )
+    _log_debug(
+        "Riepilogo parsing -listxml",
+        ["(parsing interno)"],
+        f"Blocchi <machine>/<game> trovati e interpretati in totale: {total_found} su {total} rom richieste.",
+    )
     return games
 
 
