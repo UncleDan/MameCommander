@@ -149,35 +149,57 @@ def verify_roms(rom_names: List[str], progress_cb=None) -> Dict[str, str]:
     "error: duplicate gamename" e non verificano nulla. Chiamare mame.exe
     un nome alla volta funziona con qualsiasi versione.
 
-    Ritorna { nome_rom: stato_testuale }. Righe tipiche prodotte da MAME:
-        romset puckman is good
-        romset achase [pacman] is best available
-        romset foo is bad
-        romset bar is missing
-    Il parsing e' volutamente tollerante: cerca "nome ... is <stato>" ovunque
-    nella riga, senza pretendere che la riga inizi esattamente con "romset".
+    Il FORMATO dell'output varia molto tra le versioni di MAME:
+      - versioni recenti: una riga per romset, es.
+            romset puckman is good
+            romset achase [pacman] is best available
+      - MAME 0.78b (e altre versioni vecchie), quando gli si chiede UN
+        singolo nome, non stampa affatto la riga per-romset: mostra solo
+        una barra di progresso e un riepilogo a fine verifica, es.
+            1 romsets found, 1 were OK.
+        Oppure, per un nome non riconosciuto come romset avviabile
+        (es. un BIOS come "neogeo"):
+            romset "  neogeo" not supported!
+
+    Per questo il parsing prova prima il formato "per riga" (piu' preciso,
+    da' anche lo stato "best available"), e se non trova nulla ricade sul
+    riepilogo a conteggio: se "found" == "were OK" e almeno 1, e' buono.
     """
     result: Dict[str, str] = {}
-    # Pattern principale (formato classico "romset X is Y")
     line_re = re.compile(r"romset\s+(\S+)\s*(?:\[[^\]]+\])?\s+is\s+(.+?)\.?\s*$", re.IGNORECASE)
-    # Pattern di riserva, piu' permissivo, per formati leggermente diversi
-    fallback_re = re.compile(r"^(\S+)\s*(?:\[[^\]]+\])?\s+is\s+(.+?)\.?\s*$", re.IGNORECASE)
+    not_supported_re = re.compile(r'romset\s+"?\s*(\S+)\s*"?\s+not supported', re.IGNORECASE)
+    summary_re = re.compile(r"(\d+)\s+romsets?\s+found,\s+(\d+)\s+were\s+OK\.?", re.IGNORECASE)
 
     total = len(rom_names)
     for i, name in enumerate(rom_names, 1):
         if progress_cb:
             progress_cb(f"Verifica ROM: {name} ({i}/{total})")
         out = _run_mame(["-verifyroms", name])
+
+        status = None
+
+        # 1) formato "per riga" (versioni recenti di MAME, e alcune vecchie
+        #    quando ci sono piu' righe di dettaglio da mostrare)
         for line in out.splitlines():
             line = line.strip()
-            if not line:
-                continue
             m = line_re.search(line)
-            if not m:
-                m = fallback_re.match(line)
-            if m:
-                found_name, status = m.group(1), m.group(2).strip().lower()
-                result[found_name] = status
+            if m and m.group(1).strip().lower() == name.lower():
+                status = m.group(2).strip().lower()
+                break
+
+        # 2) nome non riconosciuto/non avviabile (es. BIOS in MAME vecchi)
+        if status is None and not_supported_re.search(out):
+            status = "non supportato da questa versione di mame"
+
+        # 3) formato "a riepilogo" (MAME 0.78b e altre versioni vecchie)
+        if status is None:
+            sm = summary_re.search(out)
+            if sm:
+                found_n, ok_n = int(sm.group(1)), int(sm.group(2))
+                status = "good" if (found_n > 0 and ok_n == found_n) else "bad"
+
+        if status:
+            result[name] = status
     return result
 
 
