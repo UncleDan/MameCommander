@@ -1,24 +1,32 @@
 # MameCommander 1.0
 
-Frontend testuale per MAME, in stile Norton Commander, distribuito come
-eseguibile monolitico unico (nessuna installazione, nessuna DLL esterna).
+Frontend testuale per MAME, in stile Norton Commander.
+
+**Funziona su Windows e su Linux con lo stesso identico sorgente.**
+Su Windows si distribuisce come eseguibile monolitico unico (nessuna
+installazione, nessuna DLL esterna); su Linux si esegue direttamente,
+senza compilare e senza installare nulla.
 
 ## Cosa fa
 
-1. Verifica che `mame.exe` sia presente nella stessa cartella dell'eseguibile.
-2. Legge la cartella `ROMS` (o `roms`) accanto a `mame.exe` e trova tutti i
-   file `.zip` / `.7z`.
-3. Chiede a `mame.exe` stesso, tramite `-verifyroms`, quali romset sono
+1. Individua l'eseguibile di MAME (`mame.exe` su Windows, `mame` su
+   Linux), cercandolo prima nella propria cartella e poi nel `PATH` di
+   sistema (caso tipico quando MAME e' installato dalla distribuzione).
+2. Individua la cartella delle ROM e trova tutti i file `.zip` / `.7z`.
+   La cerca, nell'ordine: accanto al programma (`roms`, `ROMS`, `ROM`,
+   `rom`), nel `rompath` dichiarato in `mame.ini` (locale o in
+   `~/.mame/`), infine nel percorso predefinito `~/.mame/roms`.
+3. Chiede a MAME stesso, tramite `-verifyroms`, quali romset sono
    integri.
-4. Chiede a `mame.exe`, tramite `-listxml`, nome completo, se e' un BIOS e
+4. Chiede a MAME, tramite `-listxml`, nome completo, se e' un BIOS e
    se e' realmente eseguibile (esclude BIOS e slot/device), e rileva la
    versione di MAME installata.
 5. Mostra solo i giochi realmente avviabili, con il nome completo e la
    versione di MAME nella barra del titolo, in una lista navigabile con
    le frecce, ricerca digitando, avvio con Invio.
 6. Salva il risultato in un database SQLite (`MameCommander.db`, nella
-   stessa cartella dell'eseguibile): agli avvii successivi lo usa
-   direttamente, senza richiamare `mame.exe` (avvio istantaneo). Se il
+   stessa cartella del programma): agli avvii successivi lo usa
+   direttamente, senza richiamare MAME (avvio istantaneo). Se il
    file non esiste, viene creato automaticamente dopo la prima scansione.
    Da dentro l'app sono disponibili due modalita' di aggiornamento:
    - **F5 — Nuovi giochi**: cerca solo le ROM non ancora presenti nel
@@ -30,7 +38,121 @@ eseguibile monolitico unico (nessuna installazione, nessuna DLL esterna).
      e riscrive il database da zero (anche le ROM rimosse spariscono
      dalla lista).
 
-## Uso locale (senza compilare)
+## Installazione su Linux
+
+Il modo piu' semplice e' lo script `install.sh` incluso. Non compila
+nulla: copia i file al posto giusto e crea il comando `mamecommander`.
+
+```sh
+sh install.sh                # installa solo per l'utente corrente
+```
+
+Si invoca con `sh install.sh` e non `./install.sh`: cosi' funziona anche
+quando il permesso di esecuzione manca — cosa che succede **sempre** se il
+progetto e' passato per Windows, perche' il filesystem di Windows non
+conserva i permessi Unix. Non serve dare `chmod` a mano: ci pensa lo
+script.
+
+Da quel momento il comando e' disponibile ovunque:
+
+```sh
+mamecommander                # avvio normale
+mamecommander -debug         # avvio con log di debug
+```
+
+### Opzioni disponibili
+
+| Comando | Effetto |
+|---|---|
+| `sh install.sh` | Installa in `~/.local` (solo utente corrente, nessun privilegio richiesto) |
+| `sudo sh install.sh --system` | Installa in `/usr/local` per tutti gli utenti |
+| `sh install.sh --uninstall` | Rimuove l'installazione utente |
+| `sudo sh install.sh --uninstall --system` | Rimuove l'installazione di sistema |
+| `sh install.sh --help` | Mostra la guida |
+
+### Cosa viene scritto sul sistema
+
+Installazione utente (`--system` usa gli equivalenti sotto `/usr/local`):
+
+| Percorso | Contenuto |
+|---|---|
+| `~/.local/lib/mamecommander/` | `MameCommander.py` e il lanciatore |
+| `~/.local/bin/mamecommander` | Il comando vero e proprio |
+| `~/.local/share/applications/mamecommander.desktop` | Voce nel menu applicazioni |
+
+Nient'altro viene toccato, e `--uninstall` rimuove esattamente queste tre
+voci. Le ROM, `mame.ini` e il database restano dove sono.
+
+Lo script controlla in anticipo che Python 3 ci sia e che disponga
+davvero di `curses` e `sqlite3`, avvisa se MAME non e' installato, e
+segnala il caso — frequente su Debian e derivate — in cui `~/.local/bin`
+non e' incluso nel `PATH`, indicando come rimediare.
+
+### Se lavori su Windows e trasferisci il progetto su Linux
+
+E' il caso piu' insidioso, perche' produce errori dall'aspetto
+incomprensibile. Lo script di installazione li previene entrambi:
+
+- **Permessi persi.** Il filesystem di Windows non conserva il bit di
+  esecuzione Unix. Lo script lo rimette sia ai file che installa sia a
+  quelli originali del progetto, cosi' dopo l'installazione funziona
+  anche `./mamecommander` dalla cartella scompattata.
+- **Fine-riga CRLF.** Se i file vengono aperti o salvati da un editor
+  Windows prendono i terminatori `\r\n`. Su Linux questo e' fatale per
+  uno script: il sistema legge `#!/bin/sh\r` e cerca un interprete
+  chiamato `sh\r`, che non esiste, restituendo un errore fuorviante come
+  `bad interpreter` o `not found`. Lo script rileva e converte i file
+  interessati, segnalando quali ha corretto.
+
+L'unico caso che lo script non puo' sistemare da solo e' quando ad avere
+i CRLF e' `install.sh` stesso: non riuscirebbe nemmeno ad avviarsi. In
+quel caso correggilo una volta e rilancia:
+
+```sh
+sed -i 's/\r$//' install.sh     # oppure: dos2unix install.sh
+sh install.sh
+```
+
+### Senza installare nulla
+
+Se preferisci tenerlo in una cartella qualsiasi, funziona lo stesso:
+
+```sh
+chmod +x mamecommander
+./mamecommander
+```
+
+## Uso su Linux (senza compilare)
+
+Non serve installare nulla: `curses` e `sqlite3` fanno gia' parte della
+libreria standard di Python 3.
+
+```sh
+chmod +x mamecommander          # una volta sola, dopo aver scompattato
+./mamecommander                 # avvio normale
+./mamecommander -debug          # avvio con log di debug
+```
+
+Lo script `mamecommander` (senza estensione) e' un piccolo lanciatore
+che richiama `MameCommander.py` con l'interprete Python disponibile.
+Se preferisci averlo tra i comandi di sistema, puoi creare un
+collegamento simbolico — il lanciatore risolve il link e trova comunque
+la propria cartella:
+
+```sh
+ln -s "$PWD/mamecommander" ~/.local/bin/mamecommander
+```
+
+In alternativa si puo' invocare direttamente lo script Python:
+
+```sh
+python3 MameCommander.py
+```
+
+## Uso su Windows (senza compilare)
+
+Qui serve il pacchetto `windows-curses` (Python non include `curses` su
+Windows).
 
 ### In cmd.exe (prompt MS-DOS)
 
@@ -145,3 +267,61 @@ autonomo.
   presenti — non si accorge pero' delle ROM rimosse, che restano in
   lista); **F6** ricostruisce l'intero database da zero. Anche questo
   file e' escluso dal repository tramite `.gitignore`.
+
+## Uso portable su Windows (winPenPack / X-Launcher)
+
+Nella cartella `X-MameCommander/` c'e' il file `X-MameCommander.ini`, gia'
+pronto per winPenPack X-Launcher 1.5.4: avvia il frontend dentro una
+finestra `cmd.exe`, cosi' tutto (emulatore, ROM e cache) resta sulla
+chiavetta senza toccare il PC ospite.
+
+Struttura attesa sul supporto rimovibile:
+
+```
+X-MameCommander.exe          <- il launcher di X-Launcher, rinominato
+X-MameCommander.ini          <- il file di configurazione incluso
+Bin\
+  MameCommander\
+    MameCommander.exe        <- il frontend compilato
+    MameCommander.db         <- cache, creata al primo avvio
+    mame.exe                 <- MAME
+    roms\                    <- i romset
+```
+
+Attenzione a un punto: `MameCommander.exe` cerca `mame.exe`, la cartella
+`roms` e il proprio database **nella propria cartella**, non nella
+directory di lavoro. Deve quindi stare dentro la stessa cartella di MAME
+(`Bin\MameCommander`), non in una cartella separata.
+
+Il file `.ini` e' commentato in ogni sua parte e contiene gia' le varianti
+alternative: `/K` al posto di `/C` per lasciare la finestra aperta e
+leggere eventuali errori, la riga per avviare con `-debug`, e quella per
+cancellare la cache a ogni uscita invece di conservarla.
+
+## File del progetto
+
+| File | A cosa serve |
+|---|---|
+| `MameCommander.py` | Il programma: sorgente unico, gira su Linux e Windows |
+| `mamecommander` | Lanciatore Linux senza estensione |
+| `install.sh` | Installazione/disinstallazione su Linux |
+| `run_cmd.bat` | Avvio su Windows da `cmd.exe`, senza compilare |
+| `run_ps.ps1` | Avvio su Windows da PowerShell, senza compilare |
+| `build.bat` | Compila l'eseguibile unico con PyInstaller |
+| `.github/workflows/build.yml` | Compilazione automatica e release su GitHub |
+| `X-MameCommander/X-MameCommander.ini` | Configurazione winPenPack X-Launcher |
+| `requirements.txt` | Dipendenze Windows (`windows-curses`, `pyinstaller`) |
+
+## Requisiti per piattaforma
+
+| | Linux | Windows |
+|---|---|---|
+| Python | 3.8+ (di solito gia' presente) | 3.8+ |
+| Dipendenze da installare | nessuna (`curses` e `sqlite3` sono nella stdlib) | `windows-curses` |
+| Modo d'uso consigliato | eseguire direttamente `./mamecommander` | eseguibile compilato con PyInstaller |
+| Dove cerca MAME | cartella del programma, poi `PATH` | cartella del programma, poi `PATH` |
+| Dove cerca le ROM | `./roms`, `rompath` di `mame.ini`, `~/.mame/roms` | `./roms`, `rompath` di `mame.ini` |
+
+Nota: su Linux il permesso di esecuzione puo' andare perso scompattando
+l'archivio; in tal caso basta ridarlo una volta con
+`chmod +x mamecommander`.

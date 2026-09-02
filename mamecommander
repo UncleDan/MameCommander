@@ -1,0 +1,39 @@
+#!/bin/sh
+# Lanciatore per Linux/macOS: avvia MameCommander senza dover scrivere
+# l'estensione .py e senza compilare nulla.
+#
+# Uso:
+#   ./mamecommander            avvio normale
+#   ./mamecommander -debug     avvio con log di debug
+#
+# Se il file non risultasse eseguibile dopo averlo copiato o scompattato,
+# basta ridargli il permesso una volta sola:
+#   chmod +x mamecommander
+#
+# Funziona anche se richiamato tramite un collegamento simbolico messo
+# in ~/.local/bin o /usr/local/bin: risolviamo il link per trovare la
+# cartella reale in cui si trova MameCommander.py.
+
+set -e
+
+TARGET="$0"
+while [ -L "$TARGET" ]; do
+    LINK="$(readlink "$TARGET")"
+    case "$LINK" in
+        /*) TARGET="$LINK" ;;
+        *)  TARGET="$(dirname "$TARGET")/$LINK" ;;
+    esac
+done
+DIR="$(cd "$(dirname "$TARGET")" && pwd)"
+
+if command -v python3 >/dev/null 2>&1; then
+    PY=python3
+elif command -v python >/dev/null 2>&1; then
+    PY=python
+else
+    echo "Errore: Python 3 non trovato. Installalo con il gestore pacchetti" >&2
+    echo "della tua distribuzione (es. sudo apt install python3)." >&2
+    exit 1
+fi
+
+exec "$PY" "$DIR/MameCommander.py" "$@"

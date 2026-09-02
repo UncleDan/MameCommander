@@ -27,3 +27,8 @@ venv/
 # --- Log di debug e cache generati da MameCommander a runtime ---
 MameCommander_debug.log
 MameCommander.db
+
+# --- Eseguibile MAME su Linux (se tenuto accanto al frontend) ---
+/mame
+/mame64
+/mame.ini

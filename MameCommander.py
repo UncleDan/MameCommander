@@ -5,9 +5,12 @@ MameCommander - frontend per MAME in stile Norton Commander
 =============================================================
 
 Frontend testuale monolitico per MAME:
-  1. Verifica che mame.exe sia presente nella stessa cartella dell'eseguibile.
-  2. Legge la cartella ROMS e raccoglie tutti i file .zip/.7z presenti.
-  3. Interroga mame.exe stesso per sapere:
+  1. Individua l'eseguibile di MAME (mame/mame.exe), accanto a questo
+     programma oppure nel PATH di sistema.
+  2. Legge la cartella delle ROM e raccoglie tutti i file .zip/.7z
+     presenti. La cerca accanto al programma, nel 'rompath' di mame.ini
+     o in ~/.mame/roms.
+  3. Interroga MAME stesso per sapere:
        - quali romset sono integri ("-verifyroms")
        - quali sono BIOS, quali non sono eseguibili (slot/device),
          e qual e' il nome completo ("-listxml")
@@ -15,19 +18,23 @@ Frontend testuale monolitico per MAME:
      solo i giochi realmente avviabili (non BIOS, non device, romset OK),
      con il nome completo e la versione di MAME rilevata.
   5. Salva i risultati in un database SQLite (MameCommander.db, nella
-     stessa cartella dell'eseguibile) per gli avvii successivi: se il
+     stessa cartella del programma) per gli avvii successivi: se il
      file esiste viene usato direttamente (avvio istantaneo, senza
-     richiamare mame.exe), altrimenti viene creato. Da dentro l'app, F5
-     rifà la scansione completa e riscrive il database.
+     richiamare MAME), altrimenti viene creato. Da dentro l'app, F5
+     cerca solo le ROM nuove e F6 ricostruisce il database da zero.
 
 Debug: avviare con il parametro "-debug" per generare un log dettagliato
-(MameCommander_debug.log) di ogni chiamata a mame.exe. Senza questo
+(MameCommander_debug.log) di ogni chiamata a MAME. Senza questo
 parametro nessun log viene creato.
 
-Pensato per essere compilato con PyInstaller in un unico eseguibile:
-    pyinstaller --onefile --console --name MameCommander MameCommander.py
+FUNZIONA SU WINDOWS E SU LINUX con lo stesso identico sorgente.
 
-Su Windows serve il pacchetto 'windows-curses' (vedi requirements.txt).
+  - Linux: si esegue direttamente, senza compilare e senza installare
+    nulla (curses e sqlite3 fanno parte della libreria standard):
+        ./mamecommander
+  - Windows: serve il pacchetto 'windows-curses' (vedi requirements.txt),
+    e conviene compilarlo in un unico .exe con PyInstaller:
+        pyinstaller --onefile --console --name MameCommander MameCommander.py
 """
 
 APP_NAME = "MameCommander"
@@ -36,6 +43,7 @@ APP_VERSION = "1.0"
 import curses
 import os
 import re
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -61,22 +69,99 @@ def app_dir() -> str:
 
 
 APP_DIR = app_dir()
-MAME_EXE = os.path.join(APP_DIR, "mame.exe")
 DB_PATH = os.path.join(APP_DIR, f"{APP_NAME}.db")  # cache dei giochi, stessa cartella dell'eseguibile
+
+# Nomi possibili dell'eseguibile di MAME, in ordine di preferenza.
+# Su Windows ha estensione .exe; su Linux/macOS no, e le build a 64 bit
+# di qualche anno fa si chiamavano "mame64".
+if os.name == "nt":
+    MAME_EXE_CANDIDATES = ["mame.exe", "mame64.exe"]
+else:
+    MAME_EXE_CANDIDATES = ["mame", "mame64"]
+
+
+def find_mame_exe() -> Optional[str]:
+    """Cerca l'eseguibile di MAME, prima accanto al frontend e poi nel PATH.
+
+    Su Windows MAME e' quasi sempre una cartella autonoma, quindi lo si
+    trova accanto a noi. Su Linux invece e' di solito installato dalla
+    distribuzione (/usr/bin/mame, /usr/games/mame...): in quel caso non
+    e' nella nostra cartella e va cercato nel PATH.
+    """
+    for name in MAME_EXE_CANDIDATES:
+        p = os.path.join(APP_DIR, name)
+        if os.path.isfile(p):
+            return p
+    for name in MAME_EXE_CANDIDATES:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+MAME_EXE = find_mame_exe()
 
 # Il log di debug viene creato SOLO se l'app e' avviata con "-debug" (o
 # "--debug"): normalmente non scrive nulla su disco.
 DEBUG_ENABLED = any(a.lower() in ("-debug", "--debug") for a in sys.argv[1:])
 
-# Cartella ROMS: proviamo alcune varianti comuni di nome
+# Cartella ROMS: proviamo alcune varianti comuni di nome. Su Windows la
+# differenza tra maiuscole e minuscole e' irrilevante, ma su Linux il
+# filesystem le distingue, quindi provarle tutte serve davvero.
 ROMS_DIR_CANDIDATES = ["roms", "ROMS", "ROM", "rom"]
+
+# File di configurazione di MAME, da cui possiamo leggere il "rompath"
+# quando le ROM non sono accanto al frontend (situazione tipica su Linux,
+# dove stanno in ~/.mame/roms).
+MAME_INI_CANDIDATES = [
+    os.path.join(APP_DIR, "mame.ini"),
+    os.path.expanduser("~/.mame/mame.ini"),
+]
+
+_ROMPATH_RE = re.compile(r"^\s*rompath\s+(.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+def _rompaths_from_ini() -> List[str]:
+    """Estrae le cartelle elencate in 'rompath' dentro mame.ini, se esiste.
+    MAME accetta piu' percorsi separati da ';' (Windows) o ':' (Unix)."""
+    paths: List[str] = []
+    for ini in MAME_INI_CANDIDATES:
+        if not os.path.isfile(ini):
+            continue
+        try:
+            with open(ini, "r", errors="ignore") as fh:
+                text = fh.read()
+        except OSError:
+            continue
+        for m in _ROMPATH_RE.finditer(text):
+            raw = m.group(1).strip().strip('"')
+            for part in re.split(r"[;:]" if os.name != "nt" else ";", raw):
+                part = part.strip()
+                if not part:
+                    continue
+                part = os.path.expanduser(part)
+                if not os.path.isabs(part):
+                    part = os.path.join(os.path.dirname(ini), part)
+                paths.append(part)
+    return paths
 
 
 def find_roms_dir() -> Optional[str]:
+    """Individua la cartella delle ROM. Ordine di ricerca:
+    1. una sottocartella accanto al frontend (roms/ROMS/ROM/rom);
+    2. il 'rompath' dichiarato in mame.ini (locale o in ~/.mame);
+    3. il percorso predefinito di MAME su Linux (~/.mame/roms).
+    """
     for name in ROMS_DIR_CANDIDATES:
         p = os.path.join(APP_DIR, name)
         if os.path.isdir(p):
             return p
+    for p in _rompaths_from_ini():
+        if os.path.isdir(p):
+            return p
+    default_home = os.path.expanduser("~/.mame/roms")
+    if os.path.isdir(default_home):
+        return default_home
     return None
 
 
@@ -258,6 +343,62 @@ def get_mame_version_via_cli() -> Optional[str]:
     return None
 
 
+# Riconosce l'intestazione storica che MAME stampa nel proprio messaggio
+# d'uso, es. "M.A.M.E. v0.78b (Sep  1 2003) - Multiple Arcade Machine
+# Emulator" oppure semplicemente "MAME v0.106u5". Cattura il numero di
+# versione (con l'eventuale data tra parentesi).
+_BANNER_RE = re.compile(
+    r"(?:M\.A\.M\.E\.|MAME)\s*v?\.?\s*(\d+\.\d+[\w]*(?:\s*\([^)\n]*\))?)",
+    re.IGNORECASE,
+)
+
+
+def get_mame_version_via_banner() -> Optional[str]:
+    """Ultimo fallback, usato solo se anche '-version' non ha funzionato
+    (versioni molto vecchie, es. MAME 0.78b, che non riconoscono quel
+    flag e non hanno l'attributo "build" su -listxml).
+
+    Si procede in due tentativi, dal piu' sicuro al piu' invasivo:
+
+    1. 'mame -help': stampa il messaggio d'uso, con la versione in testa,
+       senza aprire nulla. Funziona sulla gran parte delle versioni.
+    2. Solo su Windows, come ultima risorsa, si esegue mame.exe SENZA
+       argomenti: le versioni DOS/Windows antiche stampano il banner e
+       terminano subito. Non lo facciamo su Linux perche' li' MAME e'
+       moderno e, senza romset, aprirebbe la propria interfaccia grafica
+       a tutto schermo invece di scrivere sul terminale (e comunque su
+       quelle versioni la versione l'abbiamo gia' ricavata prima).
+    """
+    out = _run_mame(["-help"])
+    m = _BANNER_RE.search(out)
+    if m:
+        return m.group(1).strip()
+
+    if os.name != "nt":
+        return None
+
+    try:
+        proc = subprocess.run(
+            [MAME_EXE],
+            cwd=APP_DIR,
+            capture_output=True,
+            text=True,
+            errors="ignore",
+            creationflags=subprocess.CREATE_NO_WINDOW,
+            timeout=5,
+        )
+        out = proc.stdout + "\n" + proc.stderr
+    except (subprocess.TimeoutExpired, OSError) as exc:
+        _log_debug("Chiamata a mame senza argomenti (banner)", [str(MAME_EXE)], f"Fallita: {exc}")
+        return None
+
+    _log_debug("Chiamata a mame senza argomenti (banner)", [str(MAME_EXE)], out)
+    m = _BANNER_RE.search(out)
+    if m:
+        return m.group(1).strip()
+    return None
+
+
 def _sanitize_entities(fragment: str) -> str:
     """Corregge il bug piu' comune delle vecchie liste XML di MAME: un
     carattere '&' non seguito da un'entita' valida (es. "Rock & Roll")
@@ -367,6 +508,8 @@ def build_game_list(rom_names: List[str], progress_cb=None) -> Tuple[List[Game],
     infos, mame_version = fetch_machine_info(ok_names, progress_cb)
     if not mame_version:
         mame_version = get_mame_version_via_cli()
+    if not mame_version:
+        mame_version = get_mame_version_via_banner()
     _log_debug(
         "Riepilogo -listxml",
         ["(riepilogo)"],
@@ -758,14 +901,18 @@ def main(stdscr):
     init_colors()
     curses.curs_set(0)
 
-    # 1. mame.exe presente?
-    if not os.path.isfile(MAME_EXE):
+    # 1. eseguibile di MAME presente?
+    if MAME_EXE is None:
         draw_error_screen(
             stdscr,
             [
-                "ERRORE: mame.exe non trovato.",
-                f"Percorso atteso: {MAME_EXE}",
-                "Copia questo eseguibile nella stessa cartella di mame.exe e riprova.",
+                "ERRORE: eseguibile di MAME non trovato.",
+                f"Nomi cercati: {', '.join(MAME_EXE_CANDIDATES)}",
+                f"Cercato in: {APP_DIR}",
+                "...e nelle cartelle elencate nella variabile PATH.",
+                "",
+                "Metti questo programma nella stessa cartella di MAME,",
+                "oppure installa MAME in modo che sia raggiungibile dal PATH.",
             ],
         )
         return
@@ -776,9 +923,12 @@ def main(stdscr):
         draw_error_screen(
             stdscr,
             [
-                "ERRORE: cartella ROMS non trovata.",
+                "ERRORE: cartella delle ROM non trovata.",
                 f"Cercata in: {APP_DIR} (nomi provati: roms, ROMS, ROM, rom)",
-                "Crea la cartella ROMS accanto a mame.exe e mettici i romset.",
+                "...nel 'rompath' indicato in mame.ini, e in ~/.mame/roms",
+                "",
+                "Crea una cartella ROMS accanto a questo programma e",
+                "mettici i romset, oppure configura il rompath in mame.ini.",
             ],
         )
         return
