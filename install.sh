@@ -226,7 +226,11 @@ fi
 # Esito
 # --------------------------------------------------------------------------
 echo
-echo "Installazione completata."
+echo "Installazione completata (versione script Python, non compilata)."
+echo
+echo "Nessun binario e' stato creato: viene eseguito direttamente"
+echo "$APP_NAME.py con $PY. Per aggiornarlo in futuro bastera'"
+echo "sostituire il file e rilanciare questo script."
 echo
 echo "Avvialo con:    $CMD_NAME"
 echo "Con log debug:  $CMD_NAME -debug"

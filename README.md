@@ -38,10 +38,30 @@ senza compilare e senza installare nulla.
      e riscrive il database da zero (anche le ROM rimosse spariscono
      dalla lista).
 
-## Installazione su Linux
+## Come usarlo su Linux: tre modi
 
-Il modo piu' semplice e' lo script `install.sh` incluso. Non compila
-nulla: copia i file al posto giusto e crea il comando `mamecommander`.
+Su Linux **non c'e' niente da compilare**: `curses` e `sqlite3` fanno gia'
+parte della libreria standard di Python 3, quindi lo script gira cosi'
+com'e'. I tre modi disponibili, dal piu' consigliato al piu' di nicchia:
+
+| Modo | Comando | Quando usarlo |
+|---|---|---|
+| **1. Installazione dello script** (consigliato) | `sh install.sh` | Uso normale. Installa `MameCommander.py` e crea il comando `mamecommander`. Nessuna compilazione. |
+| **2. Esecuzione diretta** | `./mamecommander` o `python3 MameCommander.py` | Per provarlo, o per tenerlo in una cartella qualsiasi senza installare nulla. |
+| **3. Binario compilato** (opzionale) | `sh build/build.sh` | Solo se serve un eseguibile unico per chi non ha Python, o per una chiavetta. |
+
+I modi 1 e 2 eseguono lo **stesso identico script Python**: cambia solo
+dove sta e come lo si richiama. Il modo 3 non sostituisce gli altri, e'
+un'aggiunta per casi particolari.
+
+## Installazione su Linux (script Python)
+
+Il modo piu' semplice e' lo script `install.sh` incluso. **Non compila
+nulla**: copia `MameCommander.py` al posto giusto e crea il comando
+`mamecommander`, che lo esegue con l'interprete Python del sistema.
+
+Il vantaggio pratico e' che per aggiornarlo in futuro basta sostituire
+il file `.py` e rilanciare `install.sh`, senza ricompilare niente.
 
 ```sh
 sh install.sh                # installa solo per l'utente corrente
@@ -122,10 +142,11 @@ chmod +x mamecommander
 ./mamecommander
 ```
 
-## Uso su Linux (senza compilare)
+## Esecuzione diretta su Linux (senza installare)
 
-Non serve installare nulla: `curses` e `sqlite3` fanno gia' parte della
-libreria standard di Python 3.
+Se non vuoi installare nulla, lo script si esegue dove si trova: e' lo
+stesso `MameCommander.py` che installerebbe `install.sh`, solo richiamato
+a mano.
 
 ```sh
 chmod +x mamecommander          # una volta sola, dopo aver scompattato
@@ -192,21 +213,55 @@ Se hai Python nel PATH, basta:
 
 ## Compilazione manuale in eseguibile unico
 
-### Modo rapido: `build.bat`
+Gli script di compilazione stanno nella sottocartella `build/`. Restano
+li' dentro ma lavorano sulla cartella del progetto, quindi non serve
+spostarli.
 
-Raddoppia `build.bat` (o eseguilo da cmd.exe/PowerShell): installa le
-dipendenze, pulisce build precedenti e compila `dist\MameCommander.exe`
-in automatico.
+### Windows: `build\build.bat`
+
+Raddoppialo (o eseguilo da cmd.exe/PowerShell): controlla che Python ci
+sia, installa le dipendenze, pulisce le build precedenti e produce
+`dist\MameCommander.exe`.
+
+### Linux: `build/build.sh`
+
+```sh
+sh build/build.sh            # compila dist/mamecommander
+sh build/build.sh --clean    # rimuove i file di compilazione
+sh build/build.sh --help     # guida
+```
+
+**Su Linux compilare non serve quasi mai**: MameCommander e' uno script
+Python e `curses`/`sqlite3` sono gia' nella libreria standard, quindi
+`install.sh` e' la strada normale. La compilazione ha senso solo se ti
+serve un binario unico da dare a chi non ha Python, o da mettere su una
+chiavetta insieme a MAME.
+
+Se la usi, tieni presente un limite di PyInstaller su Linux: il binario
+prodotto e' legato alla versione di glibc del sistema su cui viene
+compilato. Uno compilato su una distribuzione recente **non parte** su
+una piu' vecchia (errore tipico `GLIBC_2.xx not found`), mentre il
+contrario funziona. Se ti serve un binario portabile, compilalo sulla
+distribuzione piu' vecchia che intendi supportare.
+
+Lo script avvisa anche se manca PyInstaller, indicando come installarlo
+e come aggirare il rifiuto di `pip` sulle distribuzioni recenti (PEP 668).
 
 ### Modo manuale
 
-```bash
+```sh
 pip install -r requirements.txt
-pyinstaller --onefile --console --name MameCommander MameCommander.py
+pyinstaller --onefile --console --name MameCommander \
+    --workpath .pyi-work --specpath .pyi-work --distpath dist \
+    MameCommander.py
 ```
 
-L'eseguibile risultante sara' in `dist/MameCommander.exe`: va copiato nella
-stessa cartella di `mame.exe`.
+L'eseguibile risultante sara' in `dist/`: va copiato nella stessa
+cartella di MAME.
+
+I file temporanei sono indirizzati di proposito in `.pyi-work` e non
+nella cartella `build/` (che sarebbe la predefinita di PyInstaller),
+perche' `build/` contiene gli script di compilazione e non va invasa.
 
 ## Compilazione automatica (GitHub Actions)
 
@@ -307,7 +362,8 @@ cancellare la cache a ogni uscita invece di conservarla.
 | `install.sh` | Installazione/disinstallazione su Linux |
 | `run_cmd.bat` | Avvio su Windows da `cmd.exe`, senza compilare |
 | `run_ps.ps1` | Avvio su Windows da PowerShell, senza compilare |
-| `build.bat` | Compila l'eseguibile unico con PyInstaller |
+| `build/build.bat` | Compila l'eseguibile unico su Windows |
+| `build/build.sh` | Compila l'eseguibile unico su Linux (di norma non serve) |
 | `.github/workflows/build.yml` | Compilazione automatica e release su GitHub |
 | `X-MameCommander/X-MameCommander.ini` | Configurazione winPenPack X-Launcher |
 | `requirements.txt` | Dipendenze Windows (`windows-curses`, `pyinstaller`) |

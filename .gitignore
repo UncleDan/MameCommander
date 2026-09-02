@@ -16,9 +16,12 @@
 /files.zip
 
 # --- Python / PyInstaller (build di MameCommander) ---
+# NOTA: la cartella "build/" NON e' ignorata, perche' contiene gli script
+# di compilazione del progetto. I file temporanei di PyInstaller vengono
+# indirizzati apposta in ".pyi-work" (vedi build/build.bat e build/build.sh).
 __pycache__/
 *.pyc
-build/
+.pyi-work/
 dist/
 *.spec
 .venv/
