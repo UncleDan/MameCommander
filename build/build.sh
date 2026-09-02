@@ -106,6 +106,9 @@ echo "[1/2] Pulizia build precedenti..."
 rm -rf "$WORK_DIR" "$DIST_DIR" "$PROJECT_DIR/$APP_NAME.spec"
 
 echo "[2/2] Compilazione..."
+# Su Linux l'icona NON si incorpora nell'eseguibile: il formato ELF non
+# ha una sezione risorse come i .exe di Windows. L'icona viene invece
+# associata dalla voce di menu (.desktop) che crea install.sh.
 "$PY" -m PyInstaller \
     --onefile \
     --console \

@@ -34,6 +34,7 @@ echo  Cartella progetto: "%PROJECT_DIR%"
 echo.
 
 if not exist "MameCommander.py" goto :no_source
+if not exist "MameCommander.ico" goto :no_icon
 
 REM Controlla che Python sia disponibile
 python --version >nul 2>&1
@@ -52,8 +53,11 @@ if exist "MameCommander.spec" del /q "MameCommander.spec"
 
 echo.
 echo [3/3] Compilazione con PyInstaller...
+REM --icon incorpora l'icona nell'eseguibile: e' quella che si vede in
+REM Esplora risorse, sulla barra delle applicazioni e nei collegamenti.
 pyinstaller --onefile --console ^
     --name MameCommander ^
+    --icon "MameCommander.ico" ^
     --workpath ".pyi-work" ^
     --specpath ".pyi-work" ^
     --distpath "dist" ^
@@ -81,6 +85,16 @@ echo Errore: MameCommander.py non trovato in:
 echo   "%PROJECT_DIR%"
 echo.
 echo Questo script deve restare nella sottocartella "build" del progetto.
+pause
+exit /b 1
+
+:no_icon
+echo Errore: MameCommander.ico non trovato in:
+echo   "%PROJECT_DIR%"
+echo.
+echo L'icona fa parte del progetto. Se manca, puoi rigenerarla con:
+echo   python build\make_icon.py
+echo (richiede il pacchetto Pillow: pip install pillow)
 pause
 exit /b 1
 

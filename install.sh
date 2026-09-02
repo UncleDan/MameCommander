@@ -67,10 +67,12 @@ if [ "$MODE" = "system" ]; then
     LIB_DIR="/usr/local/lib/$CMD_NAME"
     BIN_DIR="/usr/local/bin"
     DESKTOP_DIR="/usr/local/share/applications"
+    ICON_DIR="/usr/local/share/icons/hicolor/256x256/apps"
 else
     LIB_DIR="$HOME/.local/lib/$CMD_NAME"
     BIN_DIR="$HOME/.local/bin"
     DESKTOP_DIR="$HOME/.local/share/applications"
+    ICON_DIR="$HOME/.local/share/icons/hicolor/256x256/apps"
 fi
 
 DESKTOP_FILE="$DESKTOP_DIR/$CMD_NAME.desktop"
@@ -82,11 +84,13 @@ if [ "$ACTION" = "uninstall" ]; then
     echo "Disinstallazione di $APP_NAME ($MODE)..."
     rm -f "$BIN_DIR/$CMD_NAME"
     rm -f "$DESKTOP_FILE"
+    rm -f "$ICON_DIR/$CMD_NAME.png"
     rm -rf "$LIB_DIR"
     echo "Fatto. Rimossi:"
     echo "  $BIN_DIR/$CMD_NAME"
     echo "  $LIB_DIR"
     echo "  $DESKTOP_FILE"
+    echo "  $ICON_DIR/$CMD_NAME.png"
     echo
     echo "Nota: le ROM, mame.ini e l'eventuale MameCommander.db non sono"
     echo "stati toccati: stanno nelle tue cartelle e restano dove sono."
@@ -150,10 +154,14 @@ echo
 # --------------------------------------------------------------------------
 # Copia dei file
 # --------------------------------------------------------------------------
-mkdir -p "$LIB_DIR" "$BIN_DIR" "$DESKTOP_DIR"
+mkdir -p "$LIB_DIR" "$BIN_DIR" "$DESKTOP_DIR" "$ICON_DIR"
 
 cp "$SRC_DIR/$APP_NAME.py" "$LIB_DIR/"
 [ -f "$SRC_DIR/README.md" ] && cp "$SRC_DIR/README.md" "$LIB_DIR/"
+# Icona per la voce di menu. Su Linux non si incorpora nell'eseguibile
+# (il formato ELF non ha una sezione risorse come i .exe di Windows):
+# si installa come file e la si indica nel .desktop.
+[ -f "$SRC_DIR/$APP_NAME.png" ] && cp "$SRC_DIR/$APP_NAME.png" "$ICON_DIR/$CMD_NAME.png"
 if [ -f "$SRC_DIR/$CMD_NAME" ]; then
     cp "$SRC_DIR/$CMD_NAME" "$LIB_DIR/"
 fi
@@ -211,15 +219,21 @@ Name=$APP_NAME
 GenericName=Frontend per MAME
 Comment=Frontend testuale per MAME in stile Norton Commander
 Exec=$BIN_DIR/$CMD_NAME
-Icon=applications-games
+Icon=$CMD_NAME
 Terminal=true
 Categories=Game;Emulator;
 Keywords=mame;arcade;emulatore;emulator;
 EOF
 echo "Voce di menu:   $DESKTOP_FILE"
+[ -f "$ICON_DIR/$CMD_NAME.png" ] && echo "Icona:          $ICON_DIR/$CMD_NAME.png"
 
 if command -v update-desktop-database >/dev/null 2>&1; then
     update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1 || true
+fi
+# Alcuni ambienti desktop mostrano la nuova icona solo dopo aver
+# aggiornato la cache del tema.
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q -t -f "$(dirname "$(dirname "$(dirname "$ICON_DIR")")")" >/dev/null 2>&1 || true
 fi
 
 # --------------------------------------------------------------------------

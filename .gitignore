@@ -35,3 +35,7 @@ MameCommander.db
 /mame
 /mame64
 /mame.ini
+
+# --- Le icone SONO parte del progetto e vanno versionate ---
+# (elencate qui solo come promemoria: non aggiungere *.ico o *.png
+#  alle esclusioni, altrimenti la build Windows fallirebbe)

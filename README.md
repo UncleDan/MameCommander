@@ -351,6 +351,45 @@ I file temporanei sono indirizzati di proposito in `.pyi-work` e non
 nella cartella `build/` (che sarebbe la predefinita di PyInstaller),
 perche' `build/` contiene gli script di compilazione e non va invasa.
 
+## Icona
+
+L'icona raffigura un joystick arcade sui colori dell'interfaccia (fondo
+blu, cornice ciano), cosi' programma e icona si riconoscono come la
+stessa cosa.
+
+| Piattaforma | Come viene usata |
+|---|---|
+| Windows | Incorporata nell'eseguibile da PyInstaller (`--icon`): compare in Esplora risorse, sulla barra delle applicazioni e nei collegamenti |
+| Linux | Installata da `install.sh` in `~/.local/share/icons/hicolor/256x256/apps/` e richiamata dalla voce di menu |
+
+Su Linux l'icona **non** puo' essere incorporata nel binario: il formato
+ELF non ha una sezione risorse come i `.exe` di Windows. PyInstaller
+accetta comunque `--icon` e lo ignora con un avviso, quindi lo stesso
+comando funziona su entrambi i sistemi.
+
+Per modificarla si usa `build/make_icon.py` (richiede Pillow):
+
+```sh
+python3 build/make_icon.py
+```
+
+Serve solo per rigenerarla: i file `.ico` e `.png` sono gia' inclusi nel
+progetto, quindi per compilare MameCommander non occorre Pillow.
+
+Due scelte tecniche dietro il generatore, che spiegano perche' non si
+limita a ridimensionare un'unica immagine grande:
+
+- **Ogni dimensione e' disegnata separatamente.** Rimpicciolire un
+  disegno dettagliato a 16x16 produce una poltiglia sfocata: a quella
+  dimensione servono forme piu' grosse e meno elementi, percio' i
+  dettagli fini compaiono solo dalle icone medie in su e i due pulsanti
+  diventano uno solo.
+- **Formati misti dentro il `.ico`.** Le dimensioni fino a 48px sono
+  salvate in BMP e solo quelle maggiori in PNG, perche' Windows
+  riconosce le voci PNG dentro un `.ico` solo da Vista in poi: le
+  versioni precedenti mostrerebbero un'icona vuota proprio alle
+  dimensioni piu' usate da Esplora risorse.
+
 ## Compilazione automatica (GitHub Actions)
 
 Il workflow `.github/workflows/build.yml`:
@@ -450,6 +489,9 @@ cancellare la cache a ogni uscita invece di conservarla.
 | `install.sh` | Installazione/disinstallazione su Linux |
 | `run_cmd.bat` | Avvio su Windows da `cmd.exe`, senza compilare |
 | `run_ps.ps1` | Avvio su Windows da PowerShell, senza compilare |
+| `MameCommander.ico` | Icona incorporata nell'eseguibile Windows |
+| `MameCommander.png` | Icona per la voce di menu su Linux |
+| `build/make_icon.py` | Rigenera le due icone (serve solo per modificarle) |
 | `build/build.bat` | Compila l'eseguibile unico su Windows |
 | `build/build.sh` | Compila l'eseguibile unico su Linux (di norma non serve) |
 | `.github/workflows/build.yml` | Compilazione automatica e release su GitHub |
