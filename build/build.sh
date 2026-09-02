@@ -4,6 +4,9 @@
 # Licenza MIT: vedi il file LICENSE.
 # SPDX-License-Identifier: MIT
 #
+# MameCommander e' un programma di utilita' non affiliato al progetto
+# MAME. Ogni merito dell'emulazione va al team di sviluppo di MAME.
+#
 #
 # MameCommander - compilazione dell'eseguibile per Linux
 # ======================================================

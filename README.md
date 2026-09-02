@@ -2,6 +2,13 @@
 
 Frontend testuale per MAME, in stile Norton Commander.
 
+> **MameCommander non e' affiliato al progetto MAME.**
+> E' un semplice programma di utilita' scritto da terzi: elenca i romset
+> presenti e richiama l'eseguibile di MAME. Non contiene codice di MAME,
+> non lo modifica e non ne fa parte in alcun modo.
+> Ogni merito del lavoro vero va al fantastico team di sviluppo di MAME
+> — vedi [Riconoscimenti](#riconoscimenti).
+
 **Funziona su Windows e su Linux con lo stesso identico sorgente.**
 Su Windows si distribuisce come eseguibile monolitico unico (nessuna
 installazione, nessuna DLL esterna); su Linux si esegue direttamente,
@@ -594,6 +601,40 @@ Nel file `.ini` di X-Launcher basta togliere il commento alla riga
 Nota: su Linux il permesso di esecuzione puo' andare perso scompattando
 l'archivio; in tal caso basta ridarlo una volta con
 `chmod +x mamecommander`.
+
+## Riconoscimenti
+
+**Tutto il merito va al team di sviluppo di MAME.**
+
+MAME e' il risultato di decenni di lavoro collettivo: reverse
+engineering di hardware spesso non documentato, stesura di driver per
+migliaia di macchine arcade e sistemi, e soprattutto un'opera di
+preservazione che ha salvato dall'oblio una parte enorme di storia del
+videogioco e dell'elettronica. E' quello il lavoro difficile, ed e' tutto
+loro.
+
+MameCommander, al confronto, e' una comodita': legge i nomi dei file
+nella cartella delle ROM, chiede a MAME stesso quali siano utilizzabili e
+ne mostra l'elenco. Tutto il resto — l'emulazione, la compatibilita', la
+correttezza — lo fa MAME. Senza il loro lavoro questo programma non
+avrebbe alcun senso di esistere.
+
+Sito ufficiale del progetto: <https://www.mamedev.org/>
+
+### Nota sull'indipendenza
+
+L'autore di MameCommander **non e' in alcun modo affiliato** al progetto
+MAME, al suo team di sviluppo o a chi lo distribuisce. Questo programma
+non e' approvato, sostenuto ne' verificato dal progetto MAME.
+
+MameCommander non include codice di MAME, non lo modifica e non lo
+ridistribuisce: si limita a eseguire l'eseguibile di MAME gia' presente
+sul sistema dell'utente, come farebbe una persona digitandone il comando.
+Eventuali difetti di questo frontend non vanno quindi imputati al
+progetto MAME.
+
+MAME e il suo logo appartengono ai rispettivi titolari e sono soggetti
+alla licenza del progetto.
 
 ## Licenza
 

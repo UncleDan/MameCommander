@@ -11,6 +11,23 @@
 #
 # SPDX-License-Identifier: MIT
 #
+# ---------------------------------------------------------------------------
+# NOTA SU MAME
+#
+# Questo e' un semplice programma di utilita': si limita a elencare i
+# romset presenti e a richiamare l'eseguibile di MAME. Non contiene
+# codice di MAME, non lo modifica e non ne fa parte in alcun modo.
+#
+# L'autore NON e' in alcun modo affiliato al progetto MAME ne' al suo
+# team di sviluppo.
+#
+# Tutto il merito del lavoro vero - decenni di reverse engineering,
+# documentazione e preservazione di migliaia di macchine arcade - va al
+# fantastico team di sviluppo di MAME e a chi vi ha contribuito.
+# Senza il loro lavoro questo frontend non avrebbe alcun senso di esistere.
+#
+# MAME e' un marchio e un progetto indipendente: https://www.mamedev.org/
+# ---------------------------------------------------------------------------
 """
 MameCommander - frontend per MAME in stile Norton Commander
 =============================================================
@@ -1219,14 +1236,46 @@ class App:
             "Avvia con il parametro -debug per generare un log dettagliato",
             "Avvia con -newconsole per aprire MAME in una finestra separata",
             "",
-            "Premi un tasto per tornare...",
+            "MameCommander e' solo un programma di utilita': elenca i romset",
+            "e richiama MAME. Non e' affiliato al progetto MAME.",
+            "Ogni merito dell'emulazione va al team di sviluppo di MAME.",
         ]
-        stdscr.erase()
-        stdscr.bkgd(" ", curses.color_pair(COLOR_NORMAL))
-        for i, line in enumerate(lines):
-            stdscr.addstr(2 + i, 4, line, curses.color_pair(COLOR_NORMAL))
-        stdscr.refresh()
-        stdscr.getch()
+
+        # L'aiuto e' piu' lungo di uno schermo da 24 righe, quindi va
+        # impaginato: scrivere oltre l'ultima riga farebbe fallire addstr
+        # e il tasto F1 andrebbe in errore invece di mostrare l'aiuto.
+        # Le righe vengono anche troncate in larghezza, per lo stesso
+        # motivo su finestre strette.
+        margine_alto = 2
+        margine_sx = 4
+        righe_utili = max(1, h - margine_alto - 2)
+        pagine = [lines[i:i + righe_utili] for i in range(0, len(lines), righe_utili)] or [[]]
+
+        pagina = 0
+        while True:
+            stdscr.erase()
+            stdscr.bkgd(" ", curses.color_pair(COLOR_NORMAL))
+            for i, line in enumerate(pagine[pagina]):
+                stdscr.addstr(
+                    margine_alto + i,
+                    margine_sx,
+                    line[: max(0, w - margine_sx - 1)],
+                    curses.color_pair(COLOR_NORMAL),
+                )
+            if len(pagine) > 1:
+                piede = f"Pagina {pagina + 1} di {len(pagine)} - un tasto per continuare, Esc per tornare"
+            else:
+                piede = "Premi un tasto per tornare..."
+            stdscr.addstr(h - 1, margine_sx, piede[: max(0, w - margine_sx - 1)],
+                          curses.color_pair(COLOR_FUNCKEYS))
+            stdscr.refresh()
+
+            ch = stdscr.getch()
+            if ch == 27 or len(pagine) == 1:   # Esc, o aiuto di una sola pagina
+                return
+            pagina += 1
+            if pagina >= len(pagine):
+                return
 
     # -- loop principale -------------------------------------------------
 

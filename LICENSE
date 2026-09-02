@@ -19,3 +19,20 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---------------------------------------------------------------------------
+NOTA SU MAME (non fa parte della licenza MIT qui sopra)
+
+MameCommander e' un semplice programma di utilita' che si limita a
+richiamare l'eseguibile di MAME. Non contiene, non modifica e non
+ridistribuisce codice di MAME.
+
+L'autore non e' in alcun modo affiliato al progetto MAME ne' al suo team
+di sviluppo, e questo programma non e' da loro approvato o sostenuto.
+
+Ogni merito dell'emulazione va al team di sviluppo di MAME, che con
+decenni di lavoro ha documentato e preservato migliaia di macchine
+arcade: https://www.mamedev.org/
+
+MAME e' soggetto alla propria licenza, distinta e indipendente da questa.
+---------------------------------------------------------------------------
