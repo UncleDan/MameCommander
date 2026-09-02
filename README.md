@@ -21,9 +21,11 @@ senza compilare e senza installare nulla.
 4. Chiede a MAME, tramite `-listxml`, nome completo, se e' un BIOS e
    se e' realmente eseguibile (esclude BIOS e slot/device), e rileva la
    versione di MAME installata.
-5. Mostra solo i giochi realmente avviabili, con il nome completo e la
-   versione di MAME nella barra del titolo, in una lista navigabile con
-   le frecce, ricerca digitando, avvio con Invio.
+5. Mostra l'elenco in una lista navigabile con le frecce, con ricerca
+   digitando e avvio con Invio. I giochi avviabili sono in evidenza; le
+   ROM difettose restano visibili in colore attenuato e non selezionabili
+   (F8 le nasconde, F7 blocca a mano un gioco). BIOS e device, che non
+   sono giochi, restano esclusi del tutto.
 6. Salva il risultato in un database SQLite (`MameCommander.db`, nella
    stessa cartella del programma): agli avvii successivi lo usa
    direttamente, senza richiamare MAME (avvio istantaneo). Se il
@@ -37,6 +39,46 @@ senza compilare e senza installare nulla.
    - **F6 — Ricostruisci**: rifa' la scansione completa di tutte le ROM
      e riscrive il database da zero (anche le ROM rimosse spariscono
      dalla lista).
+
+## Voci non selezionabili e blocco manuale
+
+Le ROM difettose non vengono piu' nascoste: restano in lista con il
+titolo leggibile ma in **colore attenuato**, e non sono avviabili. Vedere
+che un gioco c'e' ma non e' utilizzabile e' molto piu' informativo che
+non vederlo affatto, perche' spiega da solo perche' manca dall'elenco.
+
+Un marcatore a inizio riga rende lo stato riconoscibile a colpo d'occhio,
+senza dover distinguere sfumature di colore (che su alcuni terminali si
+leggono male):
+
+| Marcatore | Significato |
+|---|---|
+| *(nessuno)* | Gioco avviabile |
+| `!` | Romset difettoso o non riconosciuto da MAME |
+| `x` | Bloccato a mano con F7 |
+
+### F7 — blocca / sblocca a mano
+
+Blocca il gioco selezionato anche se MAME lo considera perfettamente
+integro. Serve per escludere dalla lista i cloni difettosi, i doppioni o
+i titoli che semplicemente non si vogliono vedere.
+
+Il blocco viene salvato subito nel database, quindi resiste al riavvio, e
+**sopravvive anche alla ricostruzione completa con F6**: e' una scelta
+tua, non un dato ricavato dalla scansione, quindi non ha senso perderla
+ogni volta. Se il database non fosse scrivibile, l'app te lo dice
+esplicitamente e il blocco vale solo per la sessione in corso.
+
+### F8 — mostra / nascondi le voci non selezionabili
+
+Alterna fra elenco completo ed elenco dei soli giochi avviabili. E' una
+preferenza di visualizzazione della sessione corrente e non viene
+salvata.
+
+Il cursore puo' passare sopra le voci non selezionabili — indispensabile,
+altrimenti non si potrebbe sbloccarle — ma Invio non le avvia: mostra il
+motivo nella barra di stato (romset corrotto, non supportato, bloccato a
+mano), invece di limitarsi a ignorare il tasto.
 
 ## Come usarlo su Linux: tre modi
 

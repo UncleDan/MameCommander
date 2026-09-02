@@ -177,15 +177,44 @@ class Game:
     is_device: bool = False
     runnable: bool = True
     rom_status: str = "sconosciuto"
+    # Blocco manuale deciso dall'utente con F7. E' indipendente dall'esito
+    # della verifica di MAME: serve per escludere a mano un gioco che
+    # tecnicamente parte ma che non si vuole in lista (es. un clone
+    # difettoso, una versione doppia, un titolo che si preferisce evitare).
+    blocked: bool = False
 
     @property
     def is_playable(self) -> bool:
+        """Vero se MAME considera il romset integro e avviabile.
+        Riguarda solo l'esito della verifica, non il blocco manuale."""
         return (
             not self.is_bios
             and not self.is_device
             and self.runnable
             and self.rom_status in STATUS_OK
         )
+
+    @property
+    def is_selectable(self) -> bool:
+        """Vero se il gioco puo' essere effettivamente avviato dalla lista:
+        deve essere integro secondo MAME E non bloccato a mano."""
+        return self.is_playable and not self.blocked
+
+    @property
+    def block_reason(self) -> str:
+        """Spiegazione breve del perche' una voce non e' selezionabile,
+        da mostrare all'utente. Stringa vuota se e' selezionabile."""
+        if self.is_selectable:
+            return ""
+        if self.blocked:
+            return "bloccato a mano"
+        if not self.runnable:
+            return "non riconosciuto da questa versione di MAME"
+        if self.rom_status == "bad":
+            return "romset incompleto o corrotto"
+        if self.rom_status == "not supported":
+            return "non supportato da questa versione di MAME"
+        return f"romset non utilizzabile ({self.rom_status})"
 
     @property
     def display_name(self) -> str:
@@ -503,9 +532,15 @@ def build_game_list(rom_names: List[str], progress_cb=None) -> Tuple[List[Game],
             "formato di output di questa versione di MAME e' diverso dal "
             "previsto.",
         )
-        return [], None
+        # Non usciamo piu' qui: anche se nessun romset e' integro, mostriamo
+        # comunque l'elenco (tutto non selezionabile). E' molto piu' utile
+        # di una schermata vuota, perche' si vede subito quali ROM ci sono
+        # e perche' non sono utilizzabili.
 
-    infos, mame_version = fetch_machine_info(ok_names, progress_cb)
+    # Chiediamo il titolo a MAME per TUTTE le ROM, non solo per quelle
+    # integre: le voci difettose restano visibili in grigio e devono
+    # mostrare il nome completo del gioco, non solo il nome del file.
+    infos, mame_version = fetch_machine_info(rom_names, progress_cb)
     if not mame_version:
         mame_version = get_mame_version_via_cli()
     if not mame_version:
@@ -513,28 +548,35 @@ def build_game_list(rom_names: List[str], progress_cb=None) -> Tuple[List[Game],
     _log_debug(
         "Riepilogo -listxml",
         ["(riepilogo)"],
-        f"Romset con info recuperate da -listxml: {len(infos)} su {len(ok_names)} attesi.",
+        f"Romset con info recuperate da -listxml: {len(infos)} su {len(rom_names)} attesi.",
     )
 
-    playable = []
-    for name in ok_names:
+    games = []
+    for name in rom_names:
         game = infos.get(name)
         if game is None:
-            # mame.exe non ha riconosciuto il nome (rom non valida per questa
-            # versione di MAME): la saltiamo.
-            continue
+            # MAME non conosce questo nome: la ROM esiste come file ma non
+            # corrisponde a nessun romset di questa versione. La teniamo in
+            # lista, non selezionabile, col nome del file come titolo.
+            game = Game(name=name, description="", runnable=False)
         game.rom_status = statuses.get(name, "sconosciuto")
-        if game.is_playable:
-            playable.append(game)
+        if game.is_bios or game.is_device:
+            # BIOS e device non sono giochi: restano esclusi del tutto,
+            # mostrarli in grigio confonderebbe e basta.
+            continue
+        games.append(game)
 
+    selezionabili = sum(1 for g in games if g.is_selectable)
     _log_debug(
         "Riepilogo finale",
         ["(riepilogo)"],
-        f"Giochi giocabili dopo il filtro BIOS/device/runnable: {len(playable)}",
+        f"Voci in lista (BIOS e device esclusi): {len(games)}, "
+        f"di cui selezionabili: {selezionabili}, "
+        f"non selezionabili: {len(games) - selezionabili}",
     )
 
-    playable.sort(key=lambda g: g.display_name.lower())
-    return playable, mame_version
+    games.sort(key=lambda g: g.display_name.lower())
+    return games, mame_version
 
 
 # --------------------------------------------------------------------------
@@ -543,19 +585,57 @@ def build_game_list(rom_names: List[str], progress_cb=None) -> Tuple[List[Game],
 
 def load_cache_from_db(db_path: str) -> Optional[Tuple[List[Game], str]]:
     """Se il database esiste ed e' leggibile, ritorna (giochi, versione_mame).
-    Altrimenti ritorna None (nessuna cache utilizzabile)."""
+    Altrimenti ritorna None (nessuna cache utilizzabile).
+
+    Gestisce anche i database creati dalle versioni precedenti, che avevano
+    solo le colonne name/description: le colonne mancanti prendono valori
+    predefiniti sensati, cosi' l'aggiornamento non obbliga a rifare la
+    scansione da zero.
+    """
     if not os.path.isfile(db_path):
         return None
     try:
         conn = sqlite3.connect(db_path)
         try:
             cur = conn.cursor()
-            cur.execute("SELECT name, description FROM games ORDER BY description COLLATE NOCASE")
-            rows = cur.fetchall()
-            games = [
-                Game(name=n, description=d, is_bios=False, is_device=False, runnable=True, rom_status="good")
-                for n, d in rows
-            ]
+
+            cur.execute("PRAGMA table_info(games)")
+            colonne = {r[1] for r in cur.fetchall()}
+            if not colonne:
+                return None
+            ha_stato = "rom_status" in colonne
+            ha_runnable = "runnable" in colonne
+            ha_blocco = "blocked" in colonne
+
+            campi = ["name", "description"]
+            if ha_stato:
+                campi.append("rom_status")
+            if ha_runnable:
+                campi.append("runnable")
+            if ha_blocco:
+                campi.append("blocked")
+
+            cur.execute(
+                f"SELECT {', '.join(campi)} FROM games ORDER BY description COLLATE NOCASE"
+            )
+            games = []
+            for row in cur.fetchall():
+                valori = dict(zip(campi, row))
+                games.append(
+                    Game(
+                        name=valori["name"],
+                        description=valori["description"],
+                        is_bios=False,
+                        is_device=False,
+                        # Nei database vecchi erano salvati solo i giochi
+                        # gia' filtrati come avviabili: quindi il default
+                        # corretto e' "integro e non bloccato".
+                        runnable=bool(valori.get("runnable", 1)),
+                        rom_status=valori.get("rom_status", "good"),
+                        blocked=bool(valori.get("blocked", 0)),
+                    )
+                )
+
             mame_version = "sconosciuta"
             try:
                 cur.execute("SELECT value FROM meta WHERE key = 'mame_version'")
@@ -572,19 +652,31 @@ def load_cache_from_db(db_path: str) -> Optional[Tuple[List[Game], str]]:
 
 
 def save_cache_to_db(db_path: str, games: List[Game], mame_version: str):
-    """Riscrive interamente MameCommander.db con l'elenco dei giochi avviabili
-    e la versione di MAME rilevata. Non blocca l'app in caso di errore."""
+    """Riscrive interamente MameCommander.db con l'elenco delle voci trovate
+    (comprese quelle non selezionabili) e la versione di MAME rilevata.
+    Non blocca l'app in caso di errore."""
     try:
         if os.path.exists(db_path):
             os.remove(db_path)
         conn = sqlite3.connect(db_path)
         try:
             cur = conn.cursor()
-            cur.execute("CREATE TABLE games (name TEXT PRIMARY KEY, description TEXT NOT NULL)")
+            cur.execute(
+                "CREATE TABLE games ("
+                "name TEXT PRIMARY KEY, "
+                "description TEXT NOT NULL, "
+                "rom_status TEXT NOT NULL DEFAULT 'good', "
+                "runnable INTEGER NOT NULL DEFAULT 1, "
+                "blocked INTEGER NOT NULL DEFAULT 0)"
+            )
             cur.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
             cur.executemany(
-                "INSERT INTO games (name, description) VALUES (?, ?)",
-                [(g.name, g.description) for g in games],
+                "INSERT INTO games (name, description, rom_status, runnable, blocked) "
+                "VALUES (?, ?, ?, ?, ?)",
+                [
+                    (g.name, g.description, g.rom_status, int(g.runnable), int(g.blocked))
+                    for g in games
+                ],
             )
             cur.execute("INSERT INTO meta (key, value) VALUES ('mame_version', ?)", (mame_version or "sconosciuta",))
             cur.execute(
@@ -598,6 +690,32 @@ def save_cache_to_db(db_path: str, games: List[Game], mame_version: str):
         pass  # la cache e' un extra: se fallisce, l'app continua a funzionare
 
 
+def set_blocked_in_db(db_path: str, name: str, blocked: bool) -> bool:
+    """Aggiorna nel database il blocco manuale di UN solo gioco (tasto F7).
+    Riscrivere tutto il database a ogni pressione sarebbe inutilmente
+    costoso. Ritorna True se il salvataggio e' riuscito: l'interfaccia lo
+    segnala, cosi' l'utente sa se il blocco durera' anche al riavvio."""
+    if not os.path.isfile(db_path):
+        return False
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            cur = conn.cursor()
+            cur.execute("PRAGMA table_info(games)")
+            colonne = {r[1] for r in cur.fetchall()}
+            if "blocked" not in colonne:
+                # Database creato da una versione precedente: aggiungiamo la
+                # colonna al volo, senza perdere quanto gia' scansionato.
+                cur.execute("ALTER TABLE games ADD COLUMN blocked INTEGER NOT NULL DEFAULT 0")
+            cur.execute("UPDATE games SET blocked = ? WHERE name = ?", (int(blocked), name))
+            conn.commit()
+            return cur.rowcount > 0
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+
+
 # --------------------------------------------------------------------------
 # Interfaccia testuale stile Norton Commander
 # --------------------------------------------------------------------------
@@ -607,6 +725,11 @@ COLOR_SELECTED = 2
 COLOR_TITLE = 3
 COLOR_ERROR = 4
 COLOR_FUNCKEYS = 5
+# Voci non selezionabili: stesso sfondo, testo attenuato.
+COLOR_DIMMED = 6
+# Voce non selezionabile ma sotto il cursore: deve restare distinguibile
+# sia dalle voci normali sia dalle selezionabili sotto il cursore.
+COLOR_DIMMED_SELECTED = 7
 
 
 def init_colors():
@@ -617,6 +740,12 @@ def init_colors():
     curses.init_pair(COLOR_TITLE, curses.COLOR_YELLOW, curses.COLOR_BLUE)
     curses.init_pair(COLOR_ERROR, curses.COLOR_WHITE, curses.COLOR_RED)
     curses.init_pair(COLOR_FUNCKEYS, curses.COLOR_BLACK, curses.COLOR_CYAN)
+    # Le voci non selezionabili usano il ciano su blu invece del bianco:
+    # sullo stesso sfondo risulta nettamente piu' spento, senza diventare
+    # illeggibile. Il grigio "vero" (COLOR_BLACK + A_BOLD) su blu risulta
+    # troppo scuro su parecchi terminali, quindi si preferisce questo.
+    curses.init_pair(COLOR_DIMMED, curses.COLOR_CYAN, curses.COLOR_BLUE)
+    curses.init_pair(COLOR_DIMMED_SELECTED, curses.COLOR_BLUE, curses.COLOR_CYAN)
 
 
 def draw_error_screen(stdscr, lines: List[str]):
@@ -646,11 +775,20 @@ class App:
         self.stdscr = stdscr
         self.games = games
         self.mame_version = mame_version
-        self.filtered = games
+        # Se mostrare anche le voci non selezionabili (ROM difettose o
+        # bloccate a mano). Si commuta con F8 e vale per la sessione
+        # corrente: non viene salvato, perche' e' una preferenza di
+        # visualizzazione, non un dato del catalogo.
+        self.show_blocked = True
+        self.filtered: List[Game] = []
         self.selected = 0
         self.top = 0
         self.search = ""
         self.search_time = 0.0
+        # Messaggio temporaneo mostrato nella barra di stato (esito di F7,
+        # motivo per cui una voce non parte, ecc.). Si azzera al tasto dopo.
+        self.message = ""
+        self.apply_search()
 
     # -- disegno -----------------------------------------------------------
 
@@ -660,8 +798,18 @@ class App:
         h, w = stdscr.getmaxyx()
         stdscr.bkgd(" ", curses.color_pair(COLOR_NORMAL))
 
-        # Titolo
-        title = f" {APP_NAME} {APP_VERSION} - MAME {self.mame_version} - {len(self.filtered)} giochi disponibili "
+        # Titolo: distinguiamo i giochi avviabili dal totale delle voci,
+        # altrimenti il conteggio diventerebbe fuorviante ora che in lista
+        # compaiono anche quelle non selezionabili.
+        avviabili = sum(1 for g in self.filtered if g.is_selectable)
+        non_sel = len(self.filtered) - avviabili
+        if non_sel and self.show_blocked:
+            conteggio = f"{avviabili} avviabili, {non_sel} non selezionabili"
+        elif non_sel:
+            conteggio = f"{avviabili} avviabili ({non_sel} nascosti)"
+        else:
+            conteggio = f"{avviabili} giochi disponibili"
+        title = f" {APP_NAME} {APP_VERSION} - MAME {self.mame_version} - {conteggio} "
         stdscr.attron(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
         stdscr.addstr(0, 0, title.ljust(w)[: w - 1])
         stdscr.attroff(curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
@@ -683,17 +831,47 @@ class App:
                 stdscr.addstr(y, 0, " " * (w - 1), curses.color_pair(COLOR_NORMAL))
                 continue
             game = self.filtered[idx]
-            text = f" {game.display_name} ({game.name})"
+
+            # Marcatore a inizio riga: uno sguardo basta a capire lo stato
+            # senza dover interpretare le sfumature di colore, che su alcuni
+            # terminali si distinguono male.
+            if game.blocked:
+                marker = "x"
+            elif not game.is_playable:
+                marker = "!"
+            else:
+                marker = " "
+            text = f" {marker} {game.display_name} ({game.name})"
             text = text.ljust(w - 1)[: w - 1]
-            attr = curses.color_pair(COLOR_SELECTED) if idx == self.selected else curses.color_pair(COLOR_NORMAL)
+
+            if game.is_selectable:
+                attr = (
+                    curses.color_pair(COLOR_SELECTED)
+                    if idx == self.selected
+                    else curses.color_pair(COLOR_NORMAL)
+                )
+            else:
+                attr = (
+                    curses.color_pair(COLOR_DIMMED_SELECTED)
+                    if idx == self.selected
+                    else curses.color_pair(COLOR_DIMMED)
+                )
             stdscr.addstr(y, 0, text, attr)
 
         # Barra di stato
-        status = f" Cerca: {self.search}" if self.search else " Digita per cercare, F5 nuovi giochi, F6 ricostruisci DB"
+        if self.message:
+            status = f" {self.message}"
+        elif self.search:
+            status = f" Cerca: {self.search}"
+        else:
+            vista = "visibili" if self.show_blocked else "nascosti"
+            status = f" Digita per cercare  |  non selezionabili: {vista} (F8)"
         stdscr.addstr(h - 2, 0, status.ljust(w)[: w - 1], curses.color_pair(COLOR_NORMAL))
 
         # Barra tasti funzione
-        funckeys = " F1 Aiuto  F5 Nuovi giochi  F6 Ricostruisci  Invio Avvia  F10/Esc Esci "
+        funckeys = (
+            " F1 Aiuto  F5 Nuovi  F6 Ricostr.  F7 Blocca  F8 Mostra/Nascondi  Invio Avvia  F10 Esci "
+        )
         stdscr.addstr(h - 1, 0, funckeys.ljust(w)[: w - 1], curses.color_pair(COLOR_FUNCKEYS))
 
         stdscr.refresh()
@@ -701,20 +879,80 @@ class App:
     # -- ricerca incrementale ------------------------------------------------
 
     def apply_search(self):
+        """Ricostruisce la lista visibile applicando, nell'ordine: il filtro
+        mostra/nascondi non selezionabili (F8) e il testo cercato."""
+        base = self.games if self.show_blocked else [g for g in self.games if g.is_selectable]
         if not self.search:
-            self.filtered = self.games
+            self.filtered = base
         else:
             s = self.search.lower()
-            self.filtered = [g for g in self.games if s in g.display_name.lower() or s in g.name.lower()]
+            self.filtered = [g for g in base if s in g.display_name.lower() or s in g.name.lower()]
         self.selected = 0
         self.top = 0
 
+    def refresh_view(self, keep_game: Optional[Game] = None):
+        """Come apply_search, ma cerca di mantenere il cursore sullo stesso
+        gioco. Serve dopo F7/F8, dove la lista puo' cambiare sotto i piedi e
+        far saltare la selezione all'inizio sarebbe fastidioso."""
+        self.apply_search()
+        if keep_game is not None:
+            for i, g in enumerate(self.filtered):
+                if g.name == keep_game.name:
+                    self.selected = i
+                    break
+
     # -- azioni --------------------------------------------------------------
+
+    def toggle_blocked(self):
+        """F7: blocca o sblocca a mano il gioco selezionato."""
+        if not self.filtered:
+            return
+        game = self.filtered[self.selected]
+        game.blocked = not game.blocked
+        salvato = set_blocked_in_db(DB_PATH, game.name, game.blocked)
+
+        azione = "bloccato" if game.blocked else "sbloccato"
+        if salvato:
+            self.message = f"'{game.display_name}' {azione}."
+        else:
+            # Onesti sull'esito: se il database non e' scrivibile il blocco
+            # vale solo finche' l'app resta aperta, ed e' bene saperlo.
+            self.message = f"'{game.display_name}' {azione} (solo per questa sessione: database non aggiornabile)."
+
+        # Se il gioco appena bloccato non deve piu' essere visibile, la lista
+        # si accorcia: teniamo il cursore in una posizione valida.
+        if game.blocked and not self.show_blocked:
+            posizione = self.selected
+            self.apply_search()
+            self.selected = min(posizione, max(0, len(self.filtered) - 1))
+        else:
+            self.refresh_view(keep_game=game)
+
+    def toggle_show_blocked(self):
+        """F8: mostra o nasconde le voci non selezionabili."""
+        corrente = self.filtered[self.selected] if self.filtered else None
+        self.show_blocked = not self.show_blocked
+        self.refresh_view(keep_game=corrente)
+        nascosti = sum(1 for g in self.games if not g.is_selectable)
+        if self.show_blocked:
+            self.message = f"Voci non selezionabili mostrate ({nascosti})."
+        else:
+            self.message = f"Voci non selezionabili nascoste ({nascosti})."
 
     def launch_selected(self):
         if not self.filtered:
             return
         game = self.filtered[self.selected]
+
+        # Voce non selezionabile: spieghiamo il motivo invece di limitarci
+        # a ignorare il tasto, altrimenti sembrerebbe che l'app sia bloccata.
+        if not game.is_selectable:
+            if game.blocked:
+                self.message = f"'{game.display_name}' e' bloccato: premi F7 per sbloccarlo."
+            else:
+                self.message = f"'{game.display_name}' non avviabile: {game.block_reason}."
+            return
+
         curses.def_prog_mode()
         curses.endwin()
         # Sovrascriviamo il testo residuo sulla console originale (es. il
@@ -763,7 +1001,15 @@ class App:
             "Invio: avvia il gioco selezionato",
             "F5: cerca solo le ROM nuove (non ritocca quelle gia' in DB)",
             "F6: ricostruisce l'intero database da zero",
+            "F7: blocca / sblocca a mano il gioco selezionato",
+            "F8: mostra o nasconde le voci non selezionabili",
             "F10 / Esc: esci",
+            "",
+            "Voci non selezionabili (mostrate in colore attenuato):",
+            "  !  romset difettoso o non riconosciuto da MAME",
+            "  x  bloccato a mano con F7",
+            "Il cursore ci passa sopra (serve per sbloccarle con F7),",
+            "ma Invio non le avvia.",
             "",
             f"Versione MAME rilevata: {self.mame_version}",
             "Avvia con il parametro -debug per generare un log dettagliato",
@@ -787,6 +1033,10 @@ class App:
             self.draw()
             ch = self.stdscr.getch()
 
+            # Il messaggio di stato dura fino al tasto successivo: cosi' si
+            # legge, ma non resta li' a sporcare la barra per sempre.
+            self.message = ""
+
             if ch in (curses.KEY_UP,):
                 if self.selected > 0:
                     self.selected -= 1
@@ -809,6 +1059,10 @@ class App:
                 return "refresh_new"
             elif ch == curses.KEY_F6:
                 return "refresh_full"
+            elif ch == curses.KEY_F7:
+                self.toggle_blocked()
+            elif ch == curses.KEY_F8:
+                self.toggle_show_blocked()
             elif ch in (curses.KEY_F10, 27):  # F10 o Esc
                 return "quit"
             elif ch in (curses.KEY_BACKSPACE, 127, 8):
@@ -837,10 +1091,17 @@ def draw_info_screen(stdscr, lines: List[str]):
     stdscr.getch()
 
 
-def scan_and_cache(stdscr, roms_dir: str) -> Tuple[List[Game], str]:
+def scan_and_cache(
+    stdscr, roms_dir: str, previous_games: Optional[List[Game]] = None
+) -> Tuple[List[Game], str]:
     """RICOSTRUZIONE COMPLETA (tasto F6): rifa' la scansione via mame.exe
     di TUTTE le ROM presenti in ROMS e riscrive da zero la cache
-    MameCommander.db. Ritorna (giochi, versione_mame)."""
+    MameCommander.db. Ritorna (giochi, versione_mame).
+
+    I blocchi manuali (F7) vengono CONSERVATI: sono scelte dell'utente, non
+    dati ricavati dalla scansione, e perderli a ogni ricostruzione sarebbe
+    una sorpresa sgradevole. Per questo si passa l'elenco precedente.
+    """
     def progress_cb(msg):
         draw_progress(stdscr, msg)
 
@@ -851,6 +1112,13 @@ def scan_and_cache(stdscr, roms_dir: str) -> Tuple[List[Game], str]:
 
     games, mame_version = build_game_list(rom_names, progress_cb)
     mame_version = mame_version or "sconosciuta"
+
+    if previous_games:
+        bloccati = {g.name for g in previous_games if g.blocked}
+        for g in games:
+            if g.name in bloccati:
+                g.blocked = True
+
     if games:
         # Non salviamo una scansione vuota: meglio ritentare al prossimo
         # avvio piuttosto che bloccare l'utente su una cache vuota.
@@ -948,9 +1216,14 @@ def main(stdscr):
             draw_error_screen(
                 stdscr,
                 [
-                    "Nessun gioco avviabile trovato.",
-                    "Verifica che i file in ROMS siano romset MAME validi",
-                    "(non BIOS-only) e compatibili con la versione di mame.exe.",
+                    "Nessuna ROM utilizzabile trovata.",
+                    "",
+                    "Le ROM difettose ora resterebbero comunque in lista, in",
+                    "colore attenuato: se la lista e' del tutto vuota vuol dire",
+                    "che nella cartella non c'e' nessun file .zip/.7z, oppure",
+                    "che contiene solo BIOS e device, che non sono giochi.",
+                    "",
+                    "Avvia con -debug per un log dettagliato della scansione.",
                 ],
             )
             return
@@ -981,7 +1254,9 @@ def main(stdscr):
                 )
 
         elif action == "refresh_full":
-            games, mame_version = scan_and_cache(stdscr, roms_dir)
+            # Passiamo l'elenco corrente cosi' i blocchi manuali (F7)
+            # sopravvivono alla ricostruzione del database.
+            games, mame_version = scan_and_cache(stdscr, roms_dir, previous_games=games)
 
 
 if __name__ == "__main__":
