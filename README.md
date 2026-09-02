@@ -502,8 +502,8 @@ d'ambiente in `PathToExe` e un `%COMSPEC%` non veniva risolto.
 
 Il messaggio d'errore mostra sempre il percorso **completo** che
 X-Launcher ha provato: confrontalo con quello reale. Quasi sempre la
-differenza e' un segmento di troppo o mancante, perche' `Root=@ScriptDir@`
-risolve tutto a partire da **dove si trova il launcher**.
+differenza e' un segmento di troppo o mancante, dovuto a una sezione
+`[FileSystem]` che dichiara un annidamento diverso da quello effettivo.
 
 ```
 cercato:  ...\winPenPack\XDrive\Bin\MameCommander\MameCommander.exe
@@ -511,12 +511,10 @@ reale:    ...\winPenPack\Bin\MameCommander\MameCommander.exe
                             ^^^^^^^ segmento di troppo
 ```
 
-In questo esempio il launcher sta in una sottocartella (`XDrive`) mentre
-`Bin` e' un livello piu' in alto. Due soluzioni, entrambe valide:
-
-- spostare `X-MameCommander.exe` e il `.ini` accanto alla cartella `Bin`;
-- oppure, nella sezione `[FileSystem]` del `.ini`, commentare `Bin=.\Bin`
-  e usare la riga gia' pronta `Bin=..\Bin`.
+Il `.ini` incluso **non** dichiara `[FileSystem]` proprio per questo:
+X-Launcher risolve gia' da solo `$Bin$` sulla cartella `Bin` di
+winPenPack, e specificarlo a mano serviva solo a poter sbagliare il
+livello.
 
 ### Se non si apre nulla e al rilancio dice "gia' in esecuzione"
 
@@ -533,6 +531,36 @@ operazioni.
 Il file `.ini` e' commentato in ogni sua parte e contiene gia' la riga
 pronta per avviare con `-debug` e quella per cancellare la cache a ogni
 uscita invece di conservarla.
+
+## L'errore "Unable to open the keyboard device"
+
+Con MAME 0.78b puo' comparire, all'avvio di un gioco:
+
+```
+Unable to open the keyboard device. (error 32)
+```
+
+**I giochi funzionano lo stesso**: e' un messaggio di DirectInput che
+riguarda l'apertura in esclusiva della tastiera, e MAME prosegue
+comunque. Non c'e' niente da fare lato frontend.
+
+In una versione precedente MameCommander avviava MAME in una finestra di
+console separata proprio per tentare di evitarlo. Alla prova dei fatti il
+messaggio compariva ugualmente, quindi quella finestra in piu' non
+risolveva nulla e aggiungeva soltanto un processo, una finestra che
+appare e sparisce, e la possibilita' di perdere il fuoco della tastiera
+fra le due console. Ora MAME viene avviato nella **stessa** console del
+frontend.
+
+Chi preferisse il vecchio comportamento — per esempio per tenere separato
+l'output di MAME — puo' avviare il frontend con:
+
+```
+MameCommander.exe -newconsole
+```
+
+Nel file `.ini` di X-Launcher basta togliere il commento alla riga
+`Parameters` e indicarlo li'.
 
 ## File del progetto
 

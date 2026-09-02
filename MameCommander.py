@@ -34,6 +34,9 @@ Frontend testuale monolitico per MAME:
      richiamare MAME), altrimenti viene creato. Da dentro l'app, F5
      cerca solo le ROM nuove e F6 ricostruisce il database da zero.
 
+Parametri: "-newconsole" avvia MAME in una finestra di console propria
+invece che in quella del frontend (di norma non serve).
+
 Debug: avviare con il parametro "-debug" per generare un log dettagliato
 (MameCommander_debug.log) di ogni chiamata a MAME. Senza questo
 parametro nessun log viene creato.
@@ -117,6 +120,11 @@ MAME_EXE = find_mame_exe()
 # Il log di debug viene creato SOLO se l'app e' avviata con "-debug" (o
 # "--debug"): normalmente non scrive nulla su disco.
 DEBUG_ENABLED = any(a.lower() in ("-debug", "--debug") for a in sys.argv[1:])
+
+# Con "-newconsole" MAME viene avviato in una finestra di console propria
+# invece che in quella del frontend. Non e' il comportamento predefinito:
+# vedi la nota in launch_selected().
+NEW_CONSOLE = any(a.lower() in ("-newconsole", "--newconsole") for a in sys.argv[1:])
 
 # Cartella ROMS: proviamo alcune varianti comuni di nome. Su Windows la
 # differenza tra maiuscole e minuscole e' irrilevante, ma su Linux il
@@ -1143,16 +1151,26 @@ class App:
         # per errore mentre si e' ancora dentro la partita.
         print(f"{APP_NAME}: lancio ROM '{game.name}'...")
         try:
-            # Lanciamo mame.exe in una console Windows NUOVA e separata da
-            # quella del frontend. Necessario perche' PDCurses (usato da
-            # windows-curses) gestisce la console in un modo che, se
-            # mame.exe eredita lo stesso handle, causa su alcune versioni
-            # (es. 0.78b, DirectInput) l'errore:
+            # MAME viene avviato NELLA STESSA console del frontend.
+            #
+            # In precedenza si apriva una console separata
+            # (CREATE_NEW_CONSOLE) per tentare di evitare il messaggio di
+            # MAME 0.78b:
             #   "Unable to open the keyboard device. (error 32)"
-            # (sharing violation sull'handle della tastiera). Con una
-            # console dedicata, mame.exe puo' aprirla in esclusiva senza
-            # conflitti col processo padre.
-            creationflags = subprocess.CREATE_NEW_CONSOLE if os.name == "nt" else 0
+            # Alla prova dei fatti quel messaggio compare lo stesso e i
+            # giochi funzionano comunque, quindi la finestra in piu' non
+            # risolveva nulla: aggiungeva solo un processo, una finestra
+            # che appare e sparisce, e la possibilita' di perdere il fuoco
+            # della tastiera fra le due console. Meglio farne a meno.
+            #
+            # Chi preferisse il vecchio comportamento (per esempio per
+            # tenere separato l'output di MAME) puo' avviare il frontend
+            # con il parametro -newconsole.
+            creationflags = (
+                subprocess.CREATE_NEW_CONSOLE
+                if (os.name == "nt" and NEW_CONSOLE)
+                else 0
+            )
             proc = subprocess.Popen([MAME_EXE, game.name], cwd=APP_DIR, creationflags=creationflags)
             proc.wait()
         except Exception as exc:
@@ -1199,6 +1217,7 @@ class App:
             "",
             f"Versione MAME rilevata: {self.mame_version}",
             "Avvia con il parametro -debug per generare un log dettagliato",
+            "Avvia con -newconsole per aprire MAME in una finestra separata",
             "",
             "Premi un tasto per tornare...",
         ]
