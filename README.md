@@ -470,9 +470,8 @@ autonomo.
 ## Uso portable su Windows (winPenPack / X-Launcher)
 
 Nella cartella `X-MameCommander/` c'e' il file `X-MameCommander.ini`, gia'
-pronto per winPenPack X-Launcher 1.5.4: avvia il frontend dentro una
-finestra `cmd.exe`, cosi' tutto (emulatore, ROM e cache) resta sulla
-chiavetta senza toccare il PC ospite.
+pronto per winPenPack X-Launcher 1.5.4: tutto (emulatore, ROM e cache)
+resta sulla chiavetta, senza toccare il PC ospite.
 
 Struttura attesa sul supporto rimovibile:
 
@@ -492,10 +491,48 @@ Attenzione a un punto: `MameCommander.exe` cerca `mame.exe`, la cartella
 directory di lavoro. Deve quindi stare dentro la stessa cartella di MAME
 (`Bin\MameCommander`), non in una cartella separata.
 
-Il file `.ini` e' commentato in ogni sua parte e contiene gia' le varianti
-alternative: `/K` al posto di `/C` per lasciare la finestra aperta e
-leggere eventuali errori, la riga per avviare con `-debug`, e quella per
-cancellare la cache a ogni uscita invece di conservarla.
+Il file `.ini` avvia direttamente `MameCommander.exe`, senza passare per
+`cmd.exe`. E' una scelta deliberata: l'eseguibile e' compilato come
+applicazione da console e apre gia' da se' la propria finestra, quindi la
+shell intermedia era un pezzo in piu' che poteva solo rompersi — e
+infatti si rompeva, perche' X-Launcher non espande le variabili
+d'ambiente in `PathToExe` e un `%COMSPEC%` non veniva risolto.
+
+### Se dice che l'eseguibile "non e' trovato"
+
+Il messaggio d'errore mostra sempre il percorso **completo** che
+X-Launcher ha provato: confrontalo con quello reale. Quasi sempre la
+differenza e' un segmento di troppo o mancante, perche' `Root=@ScriptDir@`
+risolve tutto a partire da **dove si trova il launcher**.
+
+```
+cercato:  ...\winPenPack\XDrive\Bin\MameCommander\MameCommander.exe
+reale:    ...\winPenPack\Bin\MameCommander\MameCommander.exe
+                            ^^^^^^^ segmento di troppo
+```
+
+In questo esempio il launcher sta in una sottocartella (`XDrive`) mentre
+`Bin` e' un livello piu' in alto. Due soluzioni, entrambe valide:
+
+- spostare `X-MameCommander.exe` e il `.ini` accanto alla cartella `Bin`;
+- oppure, nella sezione `[FileSystem]` del `.ini`, commentare `Bin=.\Bin`
+  e usare la riga gia' pronta `Bin=..\Bin`.
+
+### Se non si apre nulla e al rilancio dice "gia' in esecuzione"
+
+I due sintomi vanno insieme e indicano la stessa cosa: X-Launcher non e'
+riuscito ad avviare il processo ma, con `RunWait=true`, e' rimasto in
+attesa di qualcosa che non partira' mai. Restando in memoria, blocca gli
+avvii successivi per via di `MultipleIstances=false`.
+
+Per rientrare: chiudi il processo `X-MameCommander.exe` dal Gestione
+attivita'. Per capire cosa e' andato storto, metti `WriteLog=true` nella
+sezione `[Options]`: X-Launcher scrivera' un log delle proprie
+operazioni.
+
+Il file `.ini` e' commentato in ogni sua parte e contiene gia' la riga
+pronta per avviare con `-debug` e quella per cancellare la cache a ogni
+uscita invece di conservarla.
 
 ## File del progetto
 
