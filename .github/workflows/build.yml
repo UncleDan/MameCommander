@@ -27,11 +27,14 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      # Il percorso dell'icona deve essere assoluto: PyInstaller ancora i
+      # percorsi relativi dell'icona alla cartella dello .spec, che qui e'
+      # .pyi-work e non la radice del progetto.
       - name: Build monolithic executable with PyInstaller
         run: >
           pyinstaller --onefile --console
           --name ${{ env.APP_NAME }}
-          --icon MameCommander.ico
+          --icon ${{ github.workspace }}\MameCommander.ico
           --workpath .pyi-work
           --specpath .pyi-work
           --distpath dist

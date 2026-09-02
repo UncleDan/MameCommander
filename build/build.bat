@@ -55,9 +55,19 @@ echo.
 echo [3/3] Compilazione con PyInstaller...
 REM --icon incorpora l'icona nell'eseguibile: e' quella che si vede in
 REM Esplora risorse, sulla barra delle applicazioni e nei collegamenti.
+REM
+REM IMPORTANTE: il percorso dell'icona va passato ASSOLUTO.
+REM PyInstaller ancora i percorsi RELATIVI dell'icona alla cartella del
+REM file .spec, non alla directory di lavoro. Siccome qui lo .spec viene
+REM generato in ".pyi-work" (per non sporcare la cartella del progetto),
+REM un "--icon MameCommander.ico" verrebbe cercato in
+REM ".pyi-work\MameCommander.ico" e la compilazione fallirebbe con:
+REM   FileNotFoundError: Icon input file ...\.pyi-work\MameCommander.ico
+REM Il file .py invece funziona anche relativo, perche' PyInstaller lo
+REM riscrive da solo rispetto allo .spec: il trattamento e' diverso.
 pyinstaller --onefile --console ^
     --name MameCommander ^
-    --icon "MameCommander.ico" ^
+    --icon "%PROJECT_DIR%\MameCommander.ico" ^
     --workpath ".pyi-work" ^
     --specpath ".pyi-work" ^
     --distpath "dist" ^

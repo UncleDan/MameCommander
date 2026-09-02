@@ -376,6 +376,23 @@ python3 build/make_icon.py
 Serve solo per rigenerarla: i file `.ico` e `.png` sono gia' inclusi nel
 progetto, quindi per compilare MameCommander non occorre Pillow.
 
+### Perche' il percorso dell'icona e' assoluto negli script di build
+
+PyInstaller tratta i percorsi in due modi diversi: quello dello script
+`.py` lo riscrive da solo rispetto al file `.spec`, mentre quello
+dell'icona, se relativo, lo ancora alla cartella dello `.spec` senza
+adattarlo. Siccome qui lo `.spec` viene generato in `.pyi-work` per non
+sporcare la cartella del progetto, un `--icon MameCommander.ico`
+verrebbe cercato in `.pyi-work\MameCommander.ico` e la compilazione si
+fermerebbe con:
+
+```
+FileNotFoundError: Icon input file ...\.pyi-work\MameCommander.ico not found
+```
+
+Per questo `build.bat` passa `--icon "%PROJECT_DIR%\MameCommander.ico"`
+e il workflow usa `${{ github.workspace }}`.
+
 Due scelte tecniche dietro il generatore, che spiegano perche' non si
 limita a ridimensionare un'unica immagine grande:
 
