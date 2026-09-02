@@ -514,6 +514,7 @@ cancellare la cache a ogni uscita invece di conservarla.
 | `.github/workflows/build.yml` | Compilazione automatica e release su GitHub |
 | `X-MameCommander/X-MameCommander.ini` | Configurazione winPenPack X-Launcher |
 | `requirements.txt` | Dipendenze Windows (`windows-curses`, `pyinstaller`) |
+| `LICENSE` | Testo della licenza MIT |
 
 ## Requisiti per piattaforma
 
@@ -528,3 +529,33 @@ cancellare la cache a ogni uscita invece di conservarla.
 Nota: su Linux il permesso di esecuzione puo' andare perso scompattando
 l'archivio; in tal caso basta ridarlo una volta con
 `chmod +x mamecommander`.
+
+## Licenza
+
+MameCommander e' distribuito con **licenza MIT** (vedi il file
+[LICENSE](LICENSE)).
+
+Copyright (c) 2026 Daniele Lolli
+
+E' una delle licenze piu' permissive in circolazione: puoi usare,
+copiare, modificare, unire, pubblicare, distribuire, concedere in
+sottolicenza e vendere il software, anche a scopo commerciale e anche
+dentro prodotti chiusi. Non c'e' obbligo di rilasciare le tue modifiche.
+
+L'unica condizione e' l'**attribuzione**: la nota di copyright qui sopra
+e il testo della licenza vanno inclusi in ogni copia o porzione
+sostanziale del software. In pratica, se ridistribuisci il programma o
+ne riusi il codice, il file `LICENSE` (o la stessa nota) deve
+accompagnarlo.
+
+Il software e' fornito "cosi' com'e'", senza alcuna garanzia.
+
+### Cosa NON copre questa licenza
+
+- **MAME** e' un progetto separato, con licenza propria (GPL-2.0+ /
+  BSD-3-Clause a seconda dei componenti). MameCommander non lo include e
+  non lo modifica: si limita a richiamarne l'eseguibile.
+- **Le ROM** non sono coperte in alcun modo: restano soggette al
+  copyright dei rispettivi titolari.
+- **winPenPack / X-Launcher**, richiamato dal file `.ini` incluso, ha una
+  propria licenza indicata sul sito del progetto.

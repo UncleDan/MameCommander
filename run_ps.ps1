@@ -1,3 +1,8 @@
+#
+#  MameCommander - Copyright (c) 2026 Daniele Lolli
+#  Licenza MIT: vedi il file LICENSE.
+#  SPDX-License-Identifier: MIT
+#
 # MameCommander launcher per PowerShell
 # Esecuzione: .\run_ps.ps1
 

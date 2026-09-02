@@ -1,4 +1,9 @@
 @echo off
+REM
+REM  MameCommander - Copyright (c) 2026 Daniele Lolli
+REM  Licenza MIT: vedi il file LICENSE.
+REM  SPDX-License-Identifier: MIT
+REM
 REM ===========================================================================
 REM  MameCommander - compilazione dell'eseguibile monolitico per Windows
 REM ===========================================================================

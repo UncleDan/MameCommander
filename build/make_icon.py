@@ -1,4 +1,10 @@
 #!/usr/bin/env python3
+#
+# MameCommander - Copyright (c) 2026 Daniele Lolli
+# Licenza MIT: vedi il file LICENSE.
+#
+# SPDX-License-Identifier: MIT
+#
 """
 Generatore dell'icona di MameCommander.
 

@@ -1,4 +1,9 @@
 #!/bin/sh
+#
+# MameCommander - Copyright (c) 2026 Daniele Lolli
+# Licenza MIT: vedi il file LICENSE.
+# SPDX-License-Identifier: MIT
+#
 # Lanciatore per Linux/macOS: avvia MameCommander senza dover scrivere
 # l'estensione .py e senza compilare nulla.
 #

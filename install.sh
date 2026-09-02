@@ -1,5 +1,10 @@
 #!/bin/sh
 #
+# MameCommander - Copyright (c) 2026 Daniele Lolli
+# Licenza MIT: vedi il file LICENSE.
+# SPDX-License-Identifier: MIT
+#
+#
 # MameCommander - script di installazione per Linux
 # =================================================
 #
@@ -158,6 +163,10 @@ mkdir -p "$LIB_DIR" "$BIN_DIR" "$DESKTOP_DIR" "$ICON_DIR"
 
 cp "$SRC_DIR/$APP_NAME.py" "$LIB_DIR/"
 [ -f "$SRC_DIR/README.md" ] && cp "$SRC_DIR/README.md" "$LIB_DIR/"
+# La licenza va distribuita insieme al software: la MIT richiede che la
+# nota di copyright accompagni ogni copia, quindi la si installa accanto
+# ai file del programma invece di lasciarla solo nell'archivio.
+[ -f "$SRC_DIR/LICENSE" ] && cp "$SRC_DIR/LICENSE" "$LIB_DIR/"
 # Icona per la voce di menu. Su Linux non si incorpora nell'eseguibile
 # (il formato ELF non ha una sezione risorse come i .exe di Windows):
 # si installa come file e la si indica nel .desktop.
@@ -192,6 +201,7 @@ strip_cr "$LIB_DIR/$CMD_NAME"
 chmod 755 "$LIB_DIR/$APP_NAME.py"
 [ -f "$LIB_DIR/$CMD_NAME" ] && chmod 755 "$LIB_DIR/$CMD_NAME"
 [ -f "$LIB_DIR/README.md" ] && chmod 644 "$LIB_DIR/README.md"
+[ -f "$LIB_DIR/LICENSE" ] && chmod 644 "$LIB_DIR/LICENSE"
 chmod 755 "$LIB_DIR"
 
 # Rimettiamo il bit di esecuzione anche sui file ORIGINALI del progetto:

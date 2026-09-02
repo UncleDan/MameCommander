@@ -1,5 +1,10 @@
 #!/bin/sh
 #
+# MameCommander - Copyright (c) 2026 Daniele Lolli
+# Licenza MIT: vedi il file LICENSE.
+# SPDX-License-Identifier: MIT
+#
+#
 # MameCommander - compilazione dell'eseguibile per Linux
 # ======================================================
 #

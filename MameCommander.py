@@ -1,5 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+#
+# MameCommander - frontend per MAME in stile Norton Commander
+# Copyright (c) 2026 Daniele Lolli
+#
+# Distribuito con licenza MIT: vedi il file LICENSE.
+# Puoi usarlo, modificarlo e ridistribuirlo liberamente, anche a scopo
+# commerciale; l'unico obbligo e' conservare la nota di copyright qui
+# sopra e il testo della licenza.
+#
+# SPDX-License-Identifier: MIT
+#
 """
 MameCommander - frontend per MAME in stile Norton Commander
 =============================================================
@@ -35,6 +46,8 @@ FUNZIONA SU WINDOWS E SU LINUX con lo stesso identico sorgente.
   - Windows: serve il pacchetto 'windows-curses' (vedi requirements.txt),
     e conviene compilarlo in un unico .exe con PyInstaller:
         pyinstaller --onefile --console --name MameCommander MameCommander.py
+
+Licenza: MIT (vedi il file LICENSE distribuito insieme a questo file).
 """
 
 APP_NAME = "MameCommander"
