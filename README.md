@@ -223,6 +223,16 @@ Raddoppialo (o eseguilo da cmd.exe/PowerShell): controlla che Python ci
 sia, installa le dipendenze, pulisce le build precedenti e produce
 `dist\MameCommander.exe`.
 
+Gli script `.bat` del progetto sono scritti con salti a etichetta
+(`goto`) invece che con blocchi `if ... ( ... )`. Non e' una stranezza
+stilistica: `cmd.exe` espande le variabili quando **analizza** un blocco
+tra parentesi, non quando lo esegue. Se il percorso del progetto contiene
+parentesi — come `C:\repos\(local)\MameCommander` — la parentesi chiusa
+del percorso chiude il blocco in anticipo e la compilazione si interrompe
+con un errore fuorviante del tipo `\MameCommander non atteso`, anche
+quando in realta' va tutto bene. Con i salti a etichetta il problema non
+si pone, qualunque carattere contenga il percorso.
+
 ### Linux: `build/build.sh`
 
 ```sh

@@ -1,28 +1,51 @@
 @echo off
-REM MameCommander launcher per cmd.exe (MS-DOS)
-REM Semplifica l'esecuzione: basta raddoppiare il file
+REM ===========================================================================
+REM  MameCommander - avvio da cmd.exe senza compilare
+REM ===========================================================================
+REM  Basta raddoppiare questo file.
+REM
+REM  Come build.bat, evita i blocchi "if ... ( ... )" con variabili dentro:
+REM  cmd.exe li analizza espandendo le variabili in anticipo, quindi un
+REM  percorso contenente parentesi (es. "\(local)\") romperebbe lo script.
+REM ===========================================================================
 
-setlocal enabledelayedexpansion
+setlocal
 
-REM Ottieni la cartella dello script
 set "SCRIPT_DIR=%~dp0"
 cd /d "%SCRIPT_DIR%"
 
-REM Controlla se Python è disponibile
-python --version >nul 2>&1
-if errorlevel 1 (
-    echo Errore: Python non trovato nel PATH.
-    echo Scarica e installa Python da https://www.python.org
-    echo Assicurati di spuntare "Add Python to PATH" durante l'installazione.
-    pause
-    exit /b 1
-)
+if not exist "MameCommander.py" goto :no_source
 
-REM Avvia lo script
+REM Controlla se Python e' disponibile
+python --version >nul 2>&1
+if errorlevel 1 goto :no_python
+
 echo Avvio MameCommander...
-python MameCommander.py
-if errorlevel 1 (
-    echo.
-    echo Errore durante l'esecuzione.
-    pause
-)
+python "MameCommander.py" %*
+if errorlevel 1 goto :run_failed
+exit /b 0
+
+REM ---------------------------------------------------------------------------
+
+:no_source
+echo Errore: MameCommander.py non trovato in:
+echo   "%SCRIPT_DIR%"
+pause
+exit /b 1
+
+:no_python
+echo Errore: Python non trovato nel PATH.
+echo.
+echo Scarica e installa Python da https://www.python.org
+echo Assicurati di spuntare "Add Python to PATH" durante l'installazione.
+echo.
+echo Nota: serve anche il pacchetto windows-curses. Installalo con:
+echo   pip install -r requirements.txt
+pause
+exit /b 1
+
+:run_failed
+echo.
+echo Errore durante l'esecuzione.
+pause
+exit /b 1

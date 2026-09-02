@@ -10,9 +10,18 @@ REM
 REM  I file temporanei di PyInstaller finiscono in ".pyi-work" e NON in
 REM  "build": quest'ultima contiene gli script di compilazione veri e propri
 REM  e va lasciata intatta.
+REM
+REM  NOTA TECNICA - perche' questo script non usa blocchi "if ... ( ... )":
+REM  cmd.exe espande le variabili quando ANALIZZA un blocco tra parentesi,
+REM  non quando lo esegue. Se il percorso del progetto contiene parentesi
+REM  (es. C:\repos\(local)\MameCommander), la parentesi chiusa del percorso
+REM  chiude il blocco in anticipo e la compilazione fallisce con un errore
+REM  incomprensibile del tipo "\MameCommander non atteso", anche quando va
+REM  tutto bene. Usare i salti a etichetta (goto) evita il problema alla
+REM  radice, qualunque carattere contenga il percorso.
 REM ===========================================================================
 
-setlocal enabledelayedexpansion
+setlocal
 
 REM %~dp0 e' la cartella di questo script; ".." porta alla radice del progetto
 cd /d "%~dp0.."
@@ -21,34 +30,19 @@ set "PROJECT_DIR=%CD%"
 echo ============================================================
 echo  MameCommander - Build eseguibile monolitico
 echo ============================================================
-echo  Cartella progetto: %PROJECT_DIR%
+echo  Cartella progetto: "%PROJECT_DIR%"
 echo.
 
-if not exist "MameCommander.py" (
-    echo Errore: MameCommander.py non trovato in %PROJECT_DIR%
-    echo Questo script deve restare nella sottocartella "build" del progetto.
-    pause
-    exit /b 1
-)
+if not exist "MameCommander.py" goto :no_source
 
 REM Controlla che Python sia disponibile
 python --version >nul 2>&1
-if errorlevel 1 (
-    echo Errore: Python non trovato nel PATH.
-    echo Scarica e installa Python da https://www.python.org
-    echo Assicurati di spuntare "Add Python to PATH" durante l'installazione.
-    pause
-    exit /b 1
-)
+if errorlevel 1 goto :no_python
 
 echo [1/3] Installazione dipendenze...
 python -m pip install --upgrade pip >nul
 pip install -r requirements.txt
-if errorlevel 1 (
-    echo Errore durante l'installazione delle dipendenze.
-    pause
-    exit /b 1
-)
+if errorlevel 1 goto :deps_failed
 
 echo.
 echo [2/3] Pulizia build precedenti...
@@ -63,20 +57,50 @@ pyinstaller --onefile --console ^
     --workpath ".pyi-work" ^
     --specpath ".pyi-work" ^
     --distpath "dist" ^
-    MameCommander.py
-if errorlevel 1 (
-    echo.
-    echo Errore durante la compilazione.
-    pause
-    exit /b 1
-)
+    "MameCommander.py"
+if errorlevel 1 goto :build_failed
 
 echo.
 echo ============================================================
-echo  Fatto! Eseguibile creato in: dist\MameCommander.exe
+echo  Fatto! Eseguibile creato in:
+echo    "%PROJECT_DIR%\dist\MameCommander.exe"
 echo.
 echo  Copialo nella stessa cartella di mame.exe: cerca mame.exe,
 echo  la cartella roms e il proprio database NELLA PROPRIA
 echo  CARTELLA, non nella directory di lavoro.
 echo ============================================================
 pause
+exit /b 0
+
+REM ---------------------------------------------------------------------------
+REM  Gestione errori
+REM ---------------------------------------------------------------------------
+
+:no_source
+echo Errore: MameCommander.py non trovato in:
+echo   "%PROJECT_DIR%"
+echo.
+echo Questo script deve restare nella sottocartella "build" del progetto.
+pause
+exit /b 1
+
+:no_python
+echo Errore: Python non trovato nel PATH.
+echo.
+echo Scarica e installa Python da https://www.python.org
+echo Assicurati di spuntare "Add Python to PATH" durante l'installazione.
+pause
+exit /b 1
+
+:deps_failed
+echo.
+echo Errore durante l'installazione delle dipendenze.
+echo Verifica la connessione a Internet e i permessi di scrittura.
+pause
+exit /b 1
+
+:build_failed
+echo.
+echo Errore durante la compilazione.
+pause
+exit /b 1
