@@ -18,7 +18,7 @@
 # --- Python / PyInstaller (build di MameCommander) ---
 # NOTA: la cartella "build/" NON e' ignorata, perche' contiene gli script
 # di compilazione del progetto. I file temporanei di PyInstaller vengono
-# indirizzati apposta in ".pyi-work" (vedi build/build.bat e build/build.sh).
+# indirizzati apposta in ".pyi-work" (vedi build/build.cmd e build/build.sh).
 __pycache__/
 *.pyc
 .pyi-work/
@@ -39,3 +39,7 @@ MameCommander.db
 # --- Le icone SONO parte del progetto e vanno versionate ---
 # (elencate qui solo come promemoria: non aggiungere *.ico o *.png
 #  alle esclusioni, altrimenti la build Windows fallirebbe)
+
+# --- Configurazione personale: dipende dai percorsi della singola macchina ---
+# (si versiona solo l'esempio, MameCommander.ini.example)
+/MameCommander.ini

@@ -1,4 +1,4 @@
-# MameCommander 1.0
+# MameCommander 1.1
 
 Frontend testuale per MAME, in stile Norton Commander.
 
@@ -47,6 +47,100 @@ senza compilare e senza installare nulla.
      e riscrive il database da zero (anche le ROM rimosse spariscono
      dalla lista).
 
+## Uso con MAME 2003-Plus (RetroArch)
+
+Oltre a `mame.exe`, MameCommander puo' avviare i giochi con **RetroArch e
+il core MAME 2003-Plus**, con la stessa riga di comando che useresti a
+mano:
+
+```
+retroarch.exe -L cores\mame2003_plus_libretro.dll "C:\percorso\della\rom.zip"
+```
+
+MAME 2003-Plus e' costruito sul codice di MAME 0.78, quindi la gran parte
+dei romset 0.78 funziona cosi' com'e', e in piu' aggiunge centinaia di
+giochi e correzioni.
+
+### Cosa serve e dove viene cercato
+
+Servono **sia** RetroArch **sia** il core: l'uno senza l'altro non
+basta. Senza configurazione vengono cercati:
+
+| Cosa | Dove |
+|---|---|
+| `retroarch.exe` | accanto al programma, nella sottocartella `RetroArch`, in una cartella `RetroArch` allo stesso livello, nel `PATH` |
+| `mame2003_plus_libretro.dll` | nella sottocartella `cores` di RetroArch |
+| `mame2003-plus.xml` (il DAT) | cartelle `saves` e `system` di RetroArch (sotto `mame2003-plus`), cartella delle ROM, accanto al programma |
+
+Su Linux i nomi diventano `retroarch` e `mame2003_plus_libretro.so`, e si
+controlla anche `~/.config/retroarch`.
+
+La disposizione "cartella `RetroArch` allo stesso livello" e' pensata per
+winPenPack, dove ogni programma ha la sua cartella dentro `Bin`:
+
+```
+Bin\
+  MameCommander\     <- MameCommander.exe, roms\
+  RetroArch\         <- retroarch.exe, cores\
+```
+
+Per posizioni diverse si usa `MameCommander.ini` (vedi
+`MameCommander.ini.example`, commentato riga per riga).
+
+### Il file DAT: perche' serve
+
+`mame.exe` si puo' interrogare (`-verifyroms`, `-listxml`) per sapere
+quali romset sono integri e come si chiamano i giochi; RetroArch no. Al
+suo posto si usa il **DAT** di MAME 2003-Plus, un file XML che descrive
+ogni romset: titolo, ROM richieste e i loro CRC.
+
+Con il DAT, MameCommander verifica i romset **da solo**, confrontando i
+CRC richiesti con quelli presenti negli zip. Legge solo l'indice degli
+archivi, senza decomprimere nulla, quindi e' molto piu' veloce che
+richiamare `mame.exe` una volta per ogni ROM. Gestisce correttamente i
+set *split* (le ROM condivise di un clone stanno nello zip del padre) e
+i giochi che dipendono da un BIOS, come quelli Neo-Geo.
+
+**Come ottenerlo.** Il core lo genera da se': nelle opzioni del core
+abilita il menu MAME, aprilo (di solito con Tab), scegli *Generate XML
+DAT*, poi disabilita di nuovo il menu. Il file viene scritto nella
+cartella dei salvataggi di RetroArch, sotto `mame2003-plus`. Esiste
+anche una copia nel repository del core su GitHub (cartella `metadata`),
+ma non sempre e' aggiornata: meglio quella generata dal core che usi.
+
+### Se il DAT manca
+
+Il programma non si blocca, ma ripiega in quest'ordine:
+
+1. **`mame.exe` presente** → lo usa per la verifica. E' una buona
+   approssimazione, visto che MAME 2003-Plus deriva da MAME 0.78, ma non
+   perfetta: i giochi aggiunti o aggiornati da 2003-Plus possono
+   risultare sconosciuti o difettosi. Il titolo lo segnala.
+2. **Nessuna fonte** → elenca i file per nome, tutti avviabili e marcati
+   `?`. Funziona, ma senza titoli e senza poter riconoscere i BIOS.
+
+Il titolo della finestra dice sempre quale fonte e' in uso.
+
+### Se ci sono sia mame.exe sia RetroArch
+
+Senza indicazioni vince `mame.exe`, che e' il comportamento storico del
+programma. Per usare RetroArch:
+
+- in `MameCommander.ini`: `engine = retroarch`
+- oppure da riga di comando: `MameCommander.exe -engine retroarch`
+  (ha la precedenza sul file; comoda nel campo `Parameters` di X-Launcher)
+
+Cambiando motore, o aggiungendo il DAT in un secondo momento, la cache
+viene ricostruita automaticamente al primo avvio: era stata calcolata con
+criteri diversi. Le scelte fatte con F7 vengono conservate.
+
+### Limiti
+
+- Gli archivi **`.7z`** non vengono verificati, perche' la libreria
+  standard di Python non li sa aprire: compaiono come avviabili con `?`.
+- Il parametro `-newconsole` riguarda solo `mame.exe`: RetroArch apre
+  comunque una propria finestra.
+
 ## Voci non selezionabili e blocco manuale
 
 Nessuna ROM viene piu' nascosta: tutte restano in lista con il titolo
@@ -65,6 +159,7 @@ leggono male):
 | `x` | Bloccato a mano | Si' |
 | `+` | Sbloccato a mano nonostante MAME lo dia difettoso | Si' |
 | `B` | BIOS o device | **No** |
+| `?` | Avviabile, ma non verificato (manca il DAT, o archivio `.7z`) | — (F7 lo blocca) |
 
 Ogni riga mostra il titolo completo seguito dal nome del romset fra
 parentesi **quadre**, ad esempio `Pac-Man (Japan set 1) [puckman]`.
@@ -267,7 +362,7 @@ pip install -r requirements.txt
 python MameCommander.py
 ```
 
-Oppure, semplicemente, raddoppia il file `run_cmd.bat` incluso nel progetto.
+Oppure, semplicemente, raddoppia il file `run.cmd` incluso nel progetto.
 
 ### In PowerShell
 
@@ -293,7 +388,7 @@ Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
 
 Se hai Python nel PATH, basta:
 
-- **cmd.exe**: raddoppia `run_cmd.bat`
+- **cmd.exe**: raddoppia `run.cmd`
 - **PowerShell**: esegui `.\run_ps.ps1`
 
 ## Compilazione manuale in eseguibile unico
@@ -302,13 +397,13 @@ Gli script di compilazione stanno nella sottocartella `build/`. Restano
 li' dentro ma lavorano sulla cartella del progetto, quindi non serve
 spostarli.
 
-### Windows: `build\build.bat`
+### Windows: `build\build.cmd`
 
 Raddoppialo (o eseguilo da cmd.exe/PowerShell): controlla che Python ci
 sia, installa le dipendenze, pulisce le build precedenti e produce
 `dist\MameCommander.exe`.
 
-Gli script `.bat` del progetto sono scritti con salti a etichetta
+Gli script `.cmd` del progetto sono scritti con salti a etichetta
 (`goto`) invece che con blocchi `if ... ( ... )`. Non e' una stranezza
 stilistica: `cmd.exe` espande le variabili quando **analizza** un blocco
 tra parentesi, non quando lo esegue. Se il percorso del progetto contiene
@@ -397,7 +492,7 @@ fermerebbe con:
 FileNotFoundError: Icon input file ...\.pyi-work\MameCommander.ico not found
 ```
 
-Per questo `build.bat` passa `--icon "%PROJECT_DIR%\MameCommander.ico"`
+Per questo `build.cmd` passa `--icon "%PROJECT_DIR%\MameCommander.ico"`
 e il workflow usa `${{ github.workspace }}`.
 
 Due scelte tecniche dietro il generatore, che spiegano perche' non si
@@ -576,16 +671,17 @@ Nel file `.ini` di X-Launcher basta togliere il commento alla riga
 | `MameCommander.py` | Il programma: sorgente unico, gira su Linux e Windows |
 | `mamecommander` | Lanciatore Linux senza estensione |
 | `install.sh` | Installazione/disinstallazione su Linux |
-| `run_cmd.bat` | Avvio su Windows da `cmd.exe`, senza compilare |
+| `run.cmd` | Avvio su Windows da `cmd.exe`, senza compilare |
 | `run_ps.ps1` | Avvio su Windows da PowerShell, senza compilare |
 | `MameCommander.ico` | Icona incorporata nell'eseguibile Windows |
 | `MameCommander.png` | Icona per la voce di menu su Linux |
 | `build/make_icon.py` | Rigenera le due icone (serve solo per modificarle) |
-| `build/build.bat` | Compila l'eseguibile unico su Windows |
+| `build/build.cmd` | Compila l'eseguibile unico su Windows |
 | `build/build.sh` | Compila l'eseguibile unico su Linux (di norma non serve) |
 | `.github/workflows/build.yml` | Compilazione automatica e release su GitHub |
 | `X-MameCommander/X-MameCommander.ini` | Configurazione winPenPack X-Launcher |
 | `requirements.txt` | Dipendenze Windows (`windows-curses`, `pyinstaller`) |
+| `MameCommander.ini.example` | Configurazione facoltativa (scelta del motore, percorsi) |
 | `LICENSE` | Testo della licenza MIT |
 
 ## Requisiti per piattaforma

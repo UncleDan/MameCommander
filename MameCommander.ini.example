@@ -1,0 +1,51 @@
+; ---------------------------------------------------------------------------
+; MameCommander - configurazione facoltativa
+; ---------------------------------------------------------------------------
+;
+; DI NORMA QUESTO FILE NON SERVE: MameCommander trova da solo MAME oppure
+; RetroArch con il core MAME 2003-Plus.
+;
+; Serve in due casi:
+;   - sono presenti SIA mame.exe SIA RetroArch e si vuole scegliere quale
+;     usare (senza configurazione vince mame.exe);
+;   - i file stanno in posizioni che il programma non controlla da solo.
+;
+; Per usarlo: copialo accanto a MameCommander.exe con il nome
+; MameCommander.ini e togli il punto e virgola dalle righe che ti servono.
+;
+; I percorsi relativi sono risolti rispetto alla cartella del programma,
+; cosi' la configurazione resta valida anche spostando tutto su un'altra
+; unita' o su una chiavetta.
+;
+; Nota: e' un file diverso da X-MameCommander.ini, che appartiene a
+; X-Launcher di winPenPack e non c'entra con questa configurazione.
+; ---------------------------------------------------------------------------
+
+[MameCommander]
+
+; Motore da usare per avviare i giochi:
+;   auto       (predefinito) mame.exe se c'e', altrimenti RetroArch
+;   mame       sempre mame.exe
+;   retroarch  sempre RetroArch con il core MAME 2003-Plus
+; Si puo' impostare anche da riga di comando con -engine, che ha la
+; precedenza su questo file (comodo nel campo Parameters di X-Launcher).
+;engine = retroarch
+
+; RetroArch: si puo' indicare l'eseguibile oppure la sua cartella.
+; Se omesso viene cercato accanto al programma, in una sottocartella
+; RetroArch e in una cartella RetroArch allo stesso livello.
+;retroarch = ..\RetroArch\retroarch.exe
+
+; Core MAME 2003-Plus. Se omesso viene cercato nella sottocartella
+; "cores" di RetroArch.
+;core = ..\RetroArch\cores\mame2003_plus_libretro.dll
+
+; File DAT di MAME 2003-Plus, usato per conoscere i titoli dei giochi e
+; verificare l'integrita' dei romset. Si genera dal core: menu MAME (Tab)
+; -> "Generate XML DAT". Se omesso viene cercato nelle cartelle saves e
+; system di RetroArch (sotto mame2003-plus), nella cartella delle ROM e
+; accanto al programma.
+;dat = ..\RetroArch\saves\mame2003-plus\mame2003-plus.xml
+
+; Cartella delle ROM, se non e' la sottocartella "roms" del programma.
+;roms = D:\Arcade\roms

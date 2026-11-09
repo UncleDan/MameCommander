@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# MameCommander.py by Daniele Lolli (UncleDan) feat. Claude AI - Release 1.1 - 2026-11-08 23-02-40
 #
 # MameCommander - frontend per MAME in stile Norton Commander
 # Copyright (c) 2026 Daniele Lolli
@@ -71,11 +72,13 @@ Licenza: MIT (vedi il file LICENSE distribuito insieme a questo file).
 """
 
 APP_NAME = "MameCommander"
-APP_VERSION = "1.0"
+APP_VERSION = "1.1"
 
+import configparser
 import curses
 import os
 import re
+import zipfile
 import shutil
 import sqlite3
 import subprocess
@@ -91,7 +94,12 @@ import xml.etree.ElementTree as ET
 # --------------------------------------------------------------------------
 
 ROM_EXTENSIONS = (".zip", ".7z")
-STATUS_OK = ("good", "best available")
+# "non verificato": il romset non e' stato controllato (nessun DAT
+# disponibile, oppure archivio .7z che la libreria standard non sa
+# aprire). Lo si considera avviabile, segnalandolo in lista con "?":
+# meglio lasciar provare che escludere a priori un gioco che funziona.
+STATUS_UNVERIFIED = "non verificato"
+STATUS_OK = ("good", "best available", STATUS_UNVERIFIED)
 
 
 def app_dir() -> str:
@@ -133,6 +141,253 @@ def find_mame_exe() -> Optional[str]:
 
 
 MAME_EXE = find_mame_exe()
+
+
+# --------------------------------------------------------------------------
+# Configurazione facoltativa: MameCommander.ini
+# --------------------------------------------------------------------------
+#
+# Di norma non serve: il programma trova da solo MAME o RetroArch. Il file
+# serve quando sono presenti ENTRAMBI e si vuole scegliere quale usare, o
+# quando i file stanno in posizioni non standard. Esempio completo nel file
+# MameCommander.ini.example incluso nel progetto.
+#
+# Nome volutamente diverso da X-MameCommander.ini, che appartiene a
+# X-Launcher di winPenPack e non c'entra con questa configurazione.
+
+CONFIG_PATH = os.path.join(APP_DIR, f"{APP_NAME}.ini")
+CONFIG_KEYS = ("engine", "retroarch", "core", "dat", "roms")
+
+
+def _carica_config() -> Dict[str, str]:
+    """Legge MameCommander.ini, se esiste. I percorsi relativi vengono
+    risolti rispetto alla cartella del programma, cosi' la configurazione
+    resta valida anche spostando l'intera cartella (es. su una chiavetta)."""
+    risultato: Dict[str, str] = {}
+    if not os.path.isfile(CONFIG_PATH):
+        return risultato
+    cp = configparser.ConfigParser()
+    try:
+        cp.read(CONFIG_PATH, encoding="utf-8")
+    except (configparser.Error, OSError, UnicodeDecodeError):
+        return risultato
+    if not cp.has_section(APP_NAME):
+        return risultato
+    for chiave in CONFIG_KEYS:
+        valore = cp.get(APP_NAME, chiave, fallback="").strip().strip('"')
+        if not valore:
+            continue
+        if chiave != "engine":
+            valore = os.path.expanduser(valore)
+            if not os.path.isabs(valore):
+                valore = os.path.normpath(os.path.join(APP_DIR, valore))
+        else:
+            valore = valore.lower()
+        risultato[chiave] = valore
+    return risultato
+
+
+def _engine_da_riga_di_comando() -> Optional[str]:
+    """Legge "-engine mame" o "-engine retroarch" dagli argomenti. Ha la
+    precedenza sul file di configurazione, cosi' lo si puo' impostare anche
+    dal campo Parameters di X-Launcher senza toccare altro."""
+    args = sys.argv[1:]
+    for i, a in enumerate(args):
+        if a.lower() in ("-engine", "--engine") and i + 1 < len(args):
+            return args[i + 1].lower()
+        if a.lower().startswith(("-engine=", "--engine=")):
+            return a.split("=", 1)[1].lower()
+    return None
+
+
+CONFIG = _carica_config()
+_engine_cli = _engine_da_riga_di_comando()
+if _engine_cli:
+    CONFIG["engine"] = _engine_cli
+
+
+# --------------------------------------------------------------------------
+# Motori di emulazione: MAME classico oppure RetroArch + MAME 2003-Plus
+# --------------------------------------------------------------------------
+
+if os.name == "nt":
+    RETROARCH_EXE_NAMES = ["retroarch.exe"]
+    CORE_FILE_NAME = "mame2003_plus_libretro.dll"
+else:
+    RETROARCH_EXE_NAMES = ["retroarch"]
+    CORE_FILE_NAME = "mame2003_plus_libretro.so"
+
+DAT_FILE_NAME = "mame2003-plus.xml"
+
+
+@dataclass
+class Engine:
+    """Il programma che avvia effettivamente i giochi.
+
+    kind = "mame"       mame.exe classico, interrogabile con -verifyroms e
+                        -listxml per sapere quali romset sono utilizzabili.
+    kind = "retroarch"  RetroArch con il core MAME 2003-Plus. RetroArch non
+                        si puo' interrogare in quel modo: titoli e stato dei
+                        romset si ricavano dal file DAT del core (vedi
+                        load_dat), che e' anche piu' veloce.
+    """
+    kind: str
+    exe: str
+    workdir: str
+    core: Optional[str] = None
+
+    @property
+    def label(self) -> str:
+        return "MAME" if self.kind == "mame" else "MAME 2003-Plus (RetroArch)"
+
+    def command_for(self, rom_name: str, rom_path: Optional[str]) -> List[str]:
+        """Riga di comando per avviare un gioco.
+
+        MAME vuole il NOME del romset e cerca il file da se'; RetroArch
+        vuole invece il PERCORSO COMPLETO del file, perche' non conosce la
+        cartella delle ROM.
+        """
+        if self.kind == "retroarch":
+            return [self.exe, "-L", self.core, rom_path or rom_name]
+        return [self.exe, rom_name]
+
+
+def _cartelle_retroarch_candidate() -> List[str]:
+    """Dove cercare un RetroArch portatile: accanto al programma, in una
+    sottocartella RetroArch, oppure in una cartella RetroArch allo stesso
+    livello (disposizione tipica delle raccolte portatili come winPenPack,
+    con ogni programma in una sua cartella dentro Bin)."""
+    padre = os.path.dirname(APP_DIR)
+    candidate = [
+        APP_DIR,
+        os.path.join(APP_DIR, "RetroArch"),
+        os.path.join(APP_DIR, "retroarch"),
+        os.path.join(padre, "RetroArch"),
+        os.path.join(padre, "retroarch"),
+    ]
+    if os.name != "nt":
+        candidate.append(os.path.expanduser("~/.config/retroarch"))
+    return candidate
+
+
+def find_retroarch() -> Optional[Engine]:
+    """Cerca RetroArch e il core MAME 2003-Plus. Servono ENTRAMBI: RetroArch
+    senza il core non saprebbe avviare i giochi arcade, e viceversa."""
+    exe = None
+    configurato = CONFIG.get("retroarch")
+    if configurato:
+        # Accettiamo sia il percorso dell'eseguibile sia quello della cartella.
+        if os.path.isdir(configurato):
+            for n in RETROARCH_EXE_NAMES:
+                if os.path.isfile(os.path.join(configurato, n)):
+                    exe = os.path.join(configurato, n)
+                    break
+        elif os.path.isfile(configurato):
+            exe = configurato
+    else:
+        for cartella in _cartelle_retroarch_candidate():
+            for n in RETROARCH_EXE_NAMES:
+                p = os.path.join(cartella, n)
+                if os.path.isfile(p):
+                    exe = p
+                    break
+            if exe:
+                break
+        if exe is None:
+            for n in RETROARCH_EXE_NAMES:
+                trovato = shutil.which(n)
+                if trovato:
+                    exe = trovato
+                    break
+    if exe is None:
+        return None
+
+    ra_dir = os.path.dirname(os.path.abspath(exe))
+
+    core = CONFIG.get("core")
+    if core and not os.path.isfile(core):
+        return None
+    if not core:
+        candidate = [os.path.join(ra_dir, "cores", CORE_FILE_NAME)]
+        if os.name != "nt":
+            candidate += [
+                os.path.expanduser(f"~/.config/retroarch/cores/{CORE_FILE_NAME}"),
+                f"/usr/lib/libretro/{CORE_FILE_NAME}",
+                f"/usr/lib/x86_64-linux-gnu/libretro/{CORE_FILE_NAME}",
+            ]
+        core = next((c for c in candidate if os.path.isfile(c)), None)
+    if core is None:
+        return None
+
+    return Engine(kind="retroarch", exe=exe, workdir=ra_dir, core=core)
+
+
+def select_engine() -> Tuple[Optional[Engine], str]:
+    """Sceglie il motore. Ritorna (motore, spiegazione_se_assente).
+
+    Con engine=auto (predefinito) si preferisce mame.exe se presente,
+    perche' e' il comportamento storico del programma e permette la
+    verifica dei romset senza file aggiuntivi; altrimenti si usa
+    RetroArch. Per forzare RetroArch quando ci sono entrambi basta
+    engine=retroarch in MameCommander.ini o -engine retroarch.
+    """
+    scelta = CONFIG.get("engine", "auto")
+    if scelta not in ("auto", "mame", "retroarch"):
+        return None, f"valore di 'engine' non valido: '{scelta}' (usare auto, mame o retroarch)"
+
+    if scelta in ("auto", "mame") and MAME_EXE:
+        return Engine(kind="mame", exe=MAME_EXE, workdir=APP_DIR), ""
+    if scelta == "mame":
+        return None, "e' stato richiesto MAME, ma l'eseguibile non e' stato trovato"
+
+    ra = find_retroarch()
+    if ra:
+        return ra, ""
+    if scelta == "retroarch":
+        return None, (
+            "e' stato richiesto RetroArch, ma non sono stati trovati sia "
+            f"l'eseguibile sia il core {CORE_FILE_NAME}"
+        )
+    return None, "non sono stati trovati ne' MAME ne' RetroArch con il core MAME 2003-Plus"
+
+
+def find_dat(engine: Engine, roms_dir: Optional[str]) -> Optional[str]:
+    """Cerca il file DAT di MAME 2003-Plus (mame2003-plus.xml).
+
+    Il core lo genera dal menu MAME ("Generate XML DAT") e lo salva nella
+    cartella dei salvataggi di RetroArch, sotto mame2003-plus. Una copia
+    si trova anche nel repository del core su GitHub, nella cartella
+    metadata, ma non sempre aggiornata: meglio quella generata dal core
+    che si usa davvero.
+    """
+    configurato = CONFIG.get("dat")
+    if configurato:
+        return configurato if os.path.isfile(configurato) else None
+
+    candidate = [os.path.join(APP_DIR, DAT_FILE_NAME)]
+    if engine.kind == "retroarch":
+        for sotto in ("saves", "system", "savefiles"):
+            candidate.append(os.path.join(engine.workdir, sotto, "mame2003-plus", DAT_FILE_NAME))
+    if roms_dir:
+        candidate += [
+            os.path.join(roms_dir, DAT_FILE_NAME),
+            os.path.join(roms_dir, "mame2003-plus", DAT_FILE_NAME),
+        ]
+    if os.name != "nt":
+        for sotto in ("saves", "system"):
+            candidate.append(os.path.expanduser(f"~/.config/retroarch/{sotto}/mame2003-plus/{DAT_FILE_NAME}"))
+    return next((c for c in candidate if os.path.isfile(c)), None)
+
+
+def rom_file_path(roms_dir: str, name: str) -> Optional[str]:
+    """Percorso completo del file di un romset (serve a RetroArch, che a
+    differenza di MAME non cerca le ROM da se')."""
+    for ext in ROM_EXTENSIONS:
+        for variante in (ext, ext.upper()):
+            p = os.path.join(roms_dir, name + variante)
+            if os.path.isfile(p):
+                return p
+    return None
 
 # Il log di debug viene creato SOLO se l'app e' avviata con "-debug" (o
 # "--debug"): normalmente non scrive nulla su disco.
@@ -186,10 +441,15 @@ def _rompaths_from_ini() -> List[str]:
 
 def find_roms_dir() -> Optional[str]:
     """Individua la cartella delle ROM. Ordine di ricerca:
+    0. la voce "roms" di MameCommander.ini, se presente;
     1. una sottocartella accanto al frontend (roms/ROMS/ROM/rom);
     2. il 'rompath' dichiarato in mame.ini (locale o in ~/.mame);
     3. il percorso predefinito di MAME su Linux (~/.mame/roms).
     """
+    configurata = CONFIG.get("roms")
+    if configurata:
+        # Indicata esplicitamente nella configurazione: vince su tutto.
+        return configurata if os.path.isdir(configurata) else None
     for name in ROMS_DIR_CANDIDATES:
         p = os.path.join(APP_DIR, name)
         if os.path.isdir(p):
@@ -571,6 +831,237 @@ def scan_rom_files(roms_dir: str) -> List[str]:
     return sorted(set(names))
 
 
+# --------------------------------------------------------------------------
+# Verifica tramite file DAT (usata con RetroArch + MAME 2003-Plus)
+# --------------------------------------------------------------------------
+
+@dataclass
+class DatRom:
+    name: str
+    crc: Optional[int]      # None se il DAT non riporta il CRC
+    merge: Optional[str]    # nome nel set padre, se la ROM e' condivisa
+    nodump: bool            # ROM mai estratta: non va cercata
+
+
+@dataclass
+class DatGame:
+    game: Game
+    romof: Optional[str]    # set da cui eredita ROM (padre o BIOS)
+    roms: List[DatRom] = field(default_factory=list)
+
+
+def load_dat(path: str) -> Tuple[Dict[str, DatGame], Optional[str]]:
+    """Legge il DAT XML di MAME 2003-Plus. Ritorna (giochi, build).
+
+    Il formato e' quello di -listxml (elementi <game> o <machine>, con le
+    <rom> e i loro CRC), quindi riusiamo la stessa tolleranza verso gli
+    '&' non escapati gia' necessaria per MAME 0.78b.
+    """
+    with open(path, "r", encoding="utf-8", errors="ignore") as fh:
+        testo = fh.read()
+
+    m = _BUILD_RE.search(testo[:2000])
+    build = m.group(1).strip() if m else None
+
+    giochi: Dict[str, DatGame] = {}
+    for blocco in _ELEMENT_RE.finditer(testo):
+        try:
+            el = ET.fromstring(_sanitize_entities(blocco.group(0)))
+        except ET.ParseError:
+            continue
+        nome = el.get("name")
+        if not nome:
+            continue
+        desc_el = el.find("description")
+        g = Game(
+            name=nome,
+            description=(desc_el.text or "").strip() if desc_el is not None else "",
+            is_bios=el.get("isbios", "no").lower() == "yes",
+            is_device=el.get("isdevice", "no").lower() == "yes",
+            runnable=el.get("runnable", "yes").lower() != "no",
+        )
+        roms = []
+        for r in el.findall("rom"):
+            crc_txt = r.get("crc")
+            try:
+                crc = int(crc_txt, 16) if crc_txt else None
+            except ValueError:
+                crc = None
+            stato = (r.get("status") or "").lower()
+            roms.append(
+                DatRom(
+                    name=r.get("name", ""),
+                    crc=crc,
+                    merge=r.get("merge"),
+                    nodump=(stato == "nodump"),
+                )
+            )
+        giochi[nome] = DatGame(game=g, romof=el.get("romof"), roms=roms)
+
+    return giochi, build
+
+
+def _crc_nello_zip(path: str) -> Optional[set]:
+    """Insieme dei CRC dei file contenuti in uno zip, letti dalla directory
+    centrale dell'archivio: non serve decomprimere nulla, quindi e' molto
+    veloce anche su collezioni grandi. Ritorna None se l'archivio non e'
+    leggibile (corrotto, o in un formato che zipfile non gestisce)."""
+    try:
+        with zipfile.ZipFile(path) as zf:
+            return {info.CRC for info in zf.infolist() if not info.is_dir()}
+    except (zipfile.BadZipFile, OSError, NotImplementedError):
+        return None
+
+
+def verify_with_dat(
+    rom_names: List[str],
+    roms_dir: str,
+    dat: Dict[str, DatGame],
+    progress_cb=None,
+) -> Dict[str, str]:
+    """Verifica ogni romset confrontando i CRC richiesti dal DAT con quelli
+    effettivamente presenti negli zip.
+
+    Gestisce i set "split" e quelli con BIOS: una ROM puo' stare nello zip
+    del gioco stesso oppure, se condivisa, in quello del padre o del BIOS
+    (catena romof). Si cerca quindi lungo tutta la catena, come fa MAME.
+
+    Stati restituiti: "good", "bad" (manca almeno una ROM o l'archivio e'
+    illeggibile), STATUS_UNVERIFIED (archivio .7z, non apribile con la
+    libreria standard), "sconosciuto" (nome assente dal DAT).
+    """
+    cache_crc: Dict[str, Optional[set]] = {}
+
+    def crc_di(nome_set: str) -> Optional[set]:
+        if nome_set not in cache_crc:
+            percorso = rom_file_path(roms_dir, nome_set)
+            if percorso is None or not percorso.lower().endswith(".zip"):
+                cache_crc[nome_set] = None
+            else:
+                cache_crc[nome_set] = _crc_nello_zip(percorso)
+        return cache_crc[nome_set]
+
+    stati: Dict[str, str] = {}
+    totale = len(rom_names)
+    for i, nome in enumerate(rom_names, 1):
+        if progress_cb:
+            progress_cb(f"Verifica ROM (DAT): {nome} ({i}/{totale})")
+
+        if nome not in dat:
+            stati[nome] = "sconosciuto"
+            continue
+
+        percorso = rom_file_path(roms_dir, nome)
+        if percorso and percorso.lower().endswith(".7z"):
+            stati[nome] = STATUS_UNVERIFIED
+            continue
+
+        propri = crc_di(nome)
+        if propri is None:
+            stati[nome] = "bad"
+            continue
+
+        # Catena dei set da cui si possono ereditare ROM (padre, BIOS...),
+        # con protezione contro eventuali cicli in un DAT malformato.
+        catena = []
+        visti = {nome}
+        corrente = dat[nome].romof
+        while corrente and corrente not in visti and corrente in dat:
+            catena.append(corrente)
+            visti.add(corrente)
+            corrente = dat[corrente].romof
+
+        completo = True
+        for rom in dat[nome].roms:
+            if rom.nodump or rom.crc is None:
+                continue
+            if rom.crc in propri:
+                continue
+            if any(rom.crc in (crc_di(a) or set()) for a in catena):
+                continue
+            completo = False
+            break
+        stati[nome] = "good" if completo else "bad"
+
+    return stati
+
+
+def build_game_list_dat(
+    rom_names: List[str], roms_dir: str, dat_path: str, progress_cb=None
+) -> Tuple[List[Game], Optional[str]]:
+    """Come build_game_list, ma con il DAT al posto di mame.exe."""
+    reset_debug_log()
+    if progress_cb:
+        progress_cb("Lettura del file DAT...")
+    dat, build = load_dat(dat_path)
+    _log_debug(
+        "DAT caricato",
+        [dat_path],
+        f"Voci nel DAT: {len(dat)}, build: {build}\nROM nella cartella: {len(rom_names)}",
+    )
+
+    stati = verify_with_dat(rom_names, roms_dir, dat, progress_cb)
+
+    giochi = []
+    for nome in rom_names:
+        if nome in dat:
+            g = dat[nome].game
+        else:
+            # File presente ma sconosciuto al DAT: probabilmente un romset di
+            # un'altra versione di MAME. Resta in lista, non avviabile.
+            g = Game(name=nome, description="", runnable=False)
+        g.rom_status = stati.get(nome, "sconosciuto")
+        giochi.append(g)
+
+    _log_debug(
+        "Riepilogo finale (DAT)",
+        ["(riepilogo)"],
+        f"Voci: {len(giochi)}, selezionabili: {sum(1 for g in giochi if g.is_selectable)}",
+    )
+    giochi.sort(key=lambda g: g.display_name.lower())
+    return giochi, build
+
+
+def build_game_list_unverified(rom_names: List[str]) -> List[Game]:
+    """Ultima risorsa: nessun DAT e nessun mame.exe. Si elencano i file con
+    il loro nome, tutti avviabili ma segnati come non verificati. Meglio un
+    elenco grezzo che funziona di uno schermo vuoto."""
+    giochi = [Game(name=n, description="", rom_status=STATUS_UNVERIFIED) for n in rom_names]
+    giochi.sort(key=lambda g: g.display_name.lower())
+    return giochi
+
+
+def build_game_list_for(
+    engine: Engine, rom_names: List[str], roms_dir: str, progress_cb=None
+) -> Tuple[List[Game], str, str]:
+    """Sceglie la fonte delle informazioni in base al motore e ritorna
+    (giochi, etichetta_versione, fonte).
+
+    Con RetroArch l'ordine di preferenza e':
+      1. il DAT di MAME 2003-Plus: e' la fonte esatta per quel core;
+      2. mame.exe, se presente: MAME 2003-Plus deriva da MAME 0.78, quindi
+         i giudizi di mame.exe sono un'approssimazione buona ma non
+         perfetta (alcuni romset sono stati aggiornati o aggiunti);
+      3. nessuna verifica, solo l'elenco dei file.
+    """
+    if engine.kind == "mame":
+        giochi, versione = build_game_list(rom_names, progress_cb)
+        return giochi, (versione or "sconosciuta"), "mame"
+
+    dat_path = find_dat(engine, roms_dir)
+    if dat_path:
+        giochi, build = build_game_list_dat(rom_names, roms_dir, dat_path, progress_cb)
+        etichetta = "2003-Plus (RetroArch)"
+        return giochi, etichetta, "dat"
+
+    if MAME_EXE:
+        giochi, versione = build_game_list(rom_names, progress_cb)
+        etichetta = "2003-Plus (RetroArch, verifica con MAME " + (versione or "?") + ")"
+        return giochi, etichetta, "mame"
+
+    return build_game_list_unverified(rom_names), "2003-Plus (RetroArch, ROM non verificate)", "nessuna"
+
+
 def build_game_list(rom_names: List[str], progress_cb=None) -> Tuple[List[Game], Optional[str]]:
     """Pipeline completa: verifica integrita' + info da MAME, poi filtro.
     Ritorna (giochi_avviabili, versione_mame)."""
@@ -725,7 +1216,11 @@ def load_cache_from_db(db_path: str) -> Optional[Tuple[List[Game], str]]:
 
 
 def save_cache_to_db(
-    db_path: str, games: List[Game], mame_version: str, show_blocked: Optional[bool] = None
+    db_path: str,
+    games: List[Game],
+    mame_version: str,
+    show_blocked: Optional[bool] = None,
+    engine_sig: Optional[str] = None,
 ):
     """Riscrive interamente MameCommander.db con l'elenco delle voci trovate
     (comprese quelle non selezionabili) e la versione di MAME rilevata.
@@ -782,11 +1277,33 @@ def save_cache_to_db(
                     "INSERT INTO meta (key, value) VALUES ('show_blocked', ?)",
                     ("1" if show_blocked else "0",),
                 )
+            if engine_sig:
+                cur.execute(
+                    "INSERT INTO meta (key, value) VALUES ('engine', ?)",
+                    (engine_sig,),
+                )
             conn.commit()
         finally:
             conn.close()
     except sqlite3.Error:
         pass  # la cache e' un extra: se fallisce, l'app continua a funzionare
+
+
+def get_cached_engine(db_path: str) -> Optional[str]:
+    """Firma del motore con cui e' stata calcolata la cache (vedi
+    engine_signature). None per i database delle versioni precedenti,
+    che erano sempre calcolati con mame.exe."""
+    if not os.path.isfile(db_path):
+        return None
+    try:
+        conn = sqlite3.connect(db_path)
+        try:
+            row = conn.execute("SELECT value FROM meta WHERE key = 'engine'").fetchone()
+            return row[0] if row and row[0] else None
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
 
 
 def get_show_blocked(db_path: str, default: bool = True) -> bool:
@@ -927,10 +1444,14 @@ class App:
         games: List[Game],
         mame_version: str = "sconosciuta",
         show_blocked: bool = True,
+        engine: Optional[Engine] = None,
+        roms_dir: Optional[str] = None,
     ):
         self.stdscr = stdscr
         self.games = games
         self.mame_version = mame_version
+        self.engine = engine or Engine(kind="mame", exe=MAME_EXE or "mame", workdir=APP_DIR)
+        self.roms_dir = roms_dir
         # Se mostrare anche le voci non selezionabili (BIOS, ROM difettose,
         # voci bloccate a mano). Si commuta con F8 e viene salvato nel
         # database, cosi' l'elenco si ripresenta come lo si e' lasciato.
@@ -998,6 +1519,8 @@ class App:
                 marker = "+"          # sbloccato a mano (forzatura)
             elif not game.is_playable:
                 marker = "!"          # difettoso secondo MAME
+            elif game.rom_status == STATUS_UNVERIFIED:
+                marker = "?"          # avviabile, ma non e' stato possibile verificarlo
             else:
                 marker = " "
             # Nome del romset fra parentesi QUADRE: moltissimi titoli MAME
@@ -1162,7 +1685,7 @@ class App:
         curses.def_prog_mode()
         curses.endwin()
         # Sovrascriviamo il testo residuo sulla console originale (es. il
-        # messaggio "Avvio MameCommander..." di run_cmd.bat/run_ps.ps1) con
+        # messaggio "Avvio MameCommander..." di run.cmd/run_ps.ps1) con
         # un messaggio esplicito: resta visibile finche' il gioco e' aperto,
         # cosi' e' chiaro cosa sta girando e si evita di rilanciarne un altro
         # per errore mentre si e' ancora dentro la partita.
@@ -1188,7 +1711,10 @@ class App:
                 if (os.name == "nt" and NEW_CONSOLE)
                 else 0
             )
-            proc = subprocess.Popen([MAME_EXE, game.name], cwd=APP_DIR, creationflags=creationflags)
+            percorso = rom_file_path(self.roms_dir, game.name) if self.roms_dir else None
+            comando = self.engine.command_for(game.name, percorso)
+            _log_debug("Avvio gioco", comando, "")
+            proc = subprocess.Popen(comando, cwd=self.engine.workdir, creationflags=creationflags)
             proc.wait()
         except Exception as exc:
             print(f"Errore avviando {game.name}: {exc}")
@@ -1227,12 +1753,15 @@ class App:
             "  x  bloccato a mano con F7",
             "  +  sbloccato a mano nonostante MAME lo dia difettoso",
             "  B  BIOS o device: non e' un gioco, NON sbloccabile",
+            "  ?  avviabile ma non verificato (manca il DAT, o archivio .7z)",
             "",
             "Le voci non selezionabili restano visibili in colore",
             "attenuato: il cursore ci passa sopra (serve per F7),",
             "ma Invio non le avvia.",
             "",
             f"Versione MAME rilevata: {self.mame_version}",
+            f"Motore: {self.engine.label}",
+            "Parametro -engine mame|retroarch per scegliere il motore",
             "Avvia con il parametro -debug per generare un log dettagliato",
             "Avvia con -newconsole per aprire MAME in una finestra separata",
             "",
@@ -1348,6 +1877,7 @@ def draw_info_screen(stdscr, lines: List[str]):
 def scan_and_cache(
     stdscr,
     roms_dir: str,
+    engine: Engine,
     previous_games: Optional[List[Game]] = None,
     show_blocked: Optional[bool] = None,
 ) -> Tuple[List[Game], str]:
@@ -1367,8 +1897,7 @@ def scan_and_cache(
     if not rom_names:
         return [], "sconosciuta"
 
-    games, mame_version = build_game_list(rom_names, progress_cb)
-    mame_version = mame_version or "sconosciuta"
+    games, mame_version, fonte = build_game_list_for(engine, rom_names, roms_dir, progress_cb)
 
     if previous_games:
         # Le forzature manuali (F7) sono scelte dell'utente, non dati
@@ -1383,13 +1912,15 @@ def scan_and_cache(
         # Non salviamo una scansione vuota: meglio ritentare al prossimo
         # avvio piuttosto che bloccare l'utente su una cache vuota.
         draw_progress(stdscr, "Aggiornamento database...")
-        save_cache_to_db(DB_PATH, games, mame_version, show_blocked)
+        save_cache_to_db(DB_PATH, games, mame_version, show_blocked,
+                         engine_sig=engine_signature(engine, fonte))
     return games, mame_version
 
 
 def scan_new_only(
     stdscr,
     roms_dir: str,
+    engine: Engine,
     existing_games: List[Game],
     existing_version: str,
     show_blocked: Optional[bool] = None,
@@ -1416,7 +1947,7 @@ def scan_new_only(
     def progress_cb(msg):
         draw_progress(stdscr, msg)
 
-    new_games, mame_version = build_game_list(new_names, progress_cb)
+    new_games, mame_version, fonte = build_game_list_for(engine, new_names, roms_dir, progress_cb)
     mame_version = mame_version or existing_version or "sconosciuta"
 
     if not new_games:
@@ -1425,26 +1956,53 @@ def scan_new_only(
     merged = existing_games + new_games
     merged.sort(key=lambda g: g.display_name.lower())
     draw_progress(stdscr, "Aggiornamento database...")
-    save_cache_to_db(DB_PATH, merged, mame_version, show_blocked)
+    save_cache_to_db(DB_PATH, merged, mame_version, show_blocked,
+                     engine_sig=engine_signature(engine, fonte))
     return merged, mame_version, len(new_games)
+
+
+def info_source(engine: Engine, roms_dir: Optional[str]) -> str:
+    """Quale fonte verra' usata per titoli e stato dei romset, senza fare
+    ancora nessuna scansione (serve per decidere se la cache e' valida)."""
+    if engine.kind == "mame":
+        return "mame"
+    if find_dat(engine, roms_dir):
+        return "dat"
+    return "mame" if MAME_EXE else "nessuna"
+
+
+def engine_signature(engine: Engine, fonte: str) -> str:
+    """Identifica motore + fonte delle informazioni. Viene salvata nella
+    cache: se all'avvio non corrisponde (si e' passati da MAME a RetroArch,
+    o e' stato aggiunto il DAT), la cache e' stata calcolata con criteri
+    diversi e va ricostruita."""
+    return f"{engine.kind}:{fonte}"
 
 
 def main(stdscr):
     init_colors()
     curses.curs_set(0)
 
-    # 1. eseguibile di MAME presente?
-    if MAME_EXE is None:
+    # 1. un motore di emulazione disponibile? (MAME o RetroArch + core)
+    engine, motivo = select_engine()
+    if engine is None:
         draw_error_screen(
             stdscr,
             [
-                "ERRORE: eseguibile di MAME non trovato.",
-                f"Nomi cercati: {', '.join(MAME_EXE_CANDIDATES)}",
-                f"Cercato in: {APP_DIR}",
-                "...e nelle cartelle elencate nella variabile PATH.",
+                f"ERRORE: {motivo}.",
                 "",
-                "Metti questo programma nella stessa cartella di MAME,",
-                "oppure installa MAME in modo che sia raggiungibile dal PATH.",
+                "Servono UNO dei due:",
+                f"  - MAME: {' o '.join(MAME_EXE_CANDIDATES)}, accanto a questo",
+                "    programma oppure raggiungibile dal PATH;",
+                f"  - RetroArch con il core {CORE_FILE_NAME}",
+                "    (nella sottocartella cores di RetroArch).",
+                "",
+                f"Cartella del programma: {APP_DIR}",
+                "RetroArch viene cercato qui, in una sottocartella RetroArch",
+                "e in una cartella RetroArch allo stesso livello.",
+                "",
+                f"Per percorsi diversi crea {APP_NAME}.ini (vedi il file",
+                f"{APP_NAME}.ini.example incluso nel progetto).",
             ],
         )
         return
@@ -1460,7 +2018,8 @@ def main(stdscr):
                 "...nel 'rompath' indicato in mame.ini, e in ~/.mame/roms",
                 "",
                 "Crea una cartella ROMS accanto a questo programma e",
-                "mettici i romset, oppure configura il rompath in mame.ini.",
+                "mettici i romset, oppure configura il rompath in mame.ini,",
+                f"oppure indicala con la voce roms= in {APP_NAME}.ini.",
             ],
         )
         return
@@ -1474,11 +2033,22 @@ def main(stdscr):
     # come lo si era lasciato alla chiusura precedente.
     show_blocked = get_show_blocked(DB_PATH)
 
+    # La cache vale solo se e' stata calcolata con lo stesso motore e la
+    # stessa fonte di informazioni di adesso. I database delle versioni
+    # precedenti non hanno la firma: erano sempre calcolati con mame.exe.
+    firma_attuale = engine_signature(engine, info_source(engine, roms_dir))
+    firma_cache = get_cached_engine(DB_PATH) or "mame:mame"
+
     cached = load_cache_from_db(DB_PATH)
-    if cached is not None and cached[0]:
+    if cached is not None and cached[0] and firma_cache == firma_attuale:
         games, mame_version = cached
     else:
-        games, mame_version = scan_and_cache(stdscr, roms_dir, show_blocked=show_blocked)
+        # Cambio di motore o di fonte: le forzature manuali (F7) si
+        # conservano comunque, sono scelte dell'utente.
+        precedenti = cached[0] if cached else None
+        games, mame_version = scan_and_cache(
+            stdscr, roms_dir, engine, previous_games=precedenti, show_blocked=show_blocked
+        )
 
     while True:
         if not games:
@@ -1497,7 +2067,8 @@ def main(stdscr):
             )
             return
 
-        app = App(stdscr, games, mame_version, show_blocked=show_blocked)
+        app = App(stdscr, games, mame_version, show_blocked=show_blocked,
+                  engine=engine, roms_dir=roms_dir)
         action = app.run()
         # L'utente potrebbe aver premuto F8: teniamo il valore aggiornato,
         # cosi' le riscansioni qui sotto non lo riportano indietro.
@@ -1508,7 +2079,7 @@ def main(stdscr):
 
         elif action == "refresh_new":
             games, mame_version, new_count = scan_new_only(
-                stdscr, roms_dir, games, mame_version, show_blocked=show_blocked
+                stdscr, roms_dir, engine, games, mame_version, show_blocked=show_blocked
             )
             if new_count > 0:
                 draw_info_screen(
@@ -1531,7 +2102,7 @@ def main(stdscr):
             # Passiamo l'elenco corrente cosi' i blocchi manuali (F7)
             # sopravvivono alla ricostruzione del database.
             games, mame_version = scan_and_cache(
-                stdscr, roms_dir, previous_games=games, show_blocked=show_blocked
+                stdscr, roms_dir, engine, previous_games=games, show_blocked=show_blocked
             )
 
 

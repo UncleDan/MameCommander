@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# make_icon.py by Daniele Lolli (UncleDan) feat. Claude AI - Release 1.1 - 2026-11-08 23-02-40
 #
 # MameCommander - Copyright (c) 2026 Daniele Lolli
 # Licenza MIT: vedi il file LICENSE.

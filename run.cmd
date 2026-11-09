@@ -1,3 +1,4 @@
+@REM run.cmd by Daniele Lolli (UncleDan) feat. Claude AI - Release 1.1 - 2026-11-08 23-02-40
 @echo off
 REM
 REM  MameCommander - Copyright (c) 2026 Daniele Lolli
@@ -9,7 +10,7 @@ REM  MameCommander - avvio da cmd.exe senza compilare
 REM ===========================================================================
 REM  Basta raddoppiare questo file.
 REM
-REM  Come build.bat, evita i blocchi "if ... ( ... )" con variabili dentro:
+REM  Come build.cmd, evita i blocchi "if ... ( ... )" con variabili dentro:
 REM  cmd.exe li analizza espandendo le variabili in anticipo, quindi un
 REM  percorso contenente parentesi (es. "\(local)\") romperebbe lo script.
 REM ===========================================================================
