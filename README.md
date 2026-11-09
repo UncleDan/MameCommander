@@ -1,4 +1,4 @@
-# MameCommander 1.2
+# MameCommander 1.3
 
 Frontend testuale per MAME, in stile Norton Commander.
 
@@ -137,9 +137,12 @@ tu, e la scelta viene ricordata fra un avvio e l'altro.
   riscansionare: la prima volta che si usa un motore lo si scansiona, poi
   passare dall'uno all'altro e' immediato. Con MAME 0.78b, che va
   interrogato una ROM alla volta, fa una differenza di minuti.
-- **Le scelte fatte con F7 valgono per entrambi i motori.** Bloccare o
-  sbloccare un gioco e' una decisione tua sul gioco, non un giudizio di un
-  particolare emulatore.
+- **Le scelte fatte con F7 valgono solo per il motore in uso.** Lo stesso
+  romset puo' funzionare con un emulatore e non con l'altro: un set
+  aggiornato da MAME 2003-Plus, per esempio, puo' non essere piu'
+  riconosciuto da MAME 0.78b. Sbloccarlo per RetroArch non deve renderlo
+  avviabile anche con MAME, e viceversa. Il messaggio di F7 indica sempre
+  a quale motore si e' applicata la scelta.
 
 Se il motore scelto l'ultima volta non c'e' piu' (per esempio hai tolto
 RetroArch), il programma usa l'altro, se disponibile, senza errori.

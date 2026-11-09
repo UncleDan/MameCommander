@@ -1,5 +1,5 @@
 #!/bin/sh
-# build.sh by Daniele Lolli (UncleDan) feat. Claude AI - Release 1.2 - 2026-11-08 23-15-30
+# build.sh by Daniele Lolli (UncleDan) feat. Claude AI - Release 1.3 - 2026-11-08 23-20-33
 #
 # MameCommander - Copyright (c) 2026 Daniele Lolli
 # Licenza MIT: vedi il file LICENSE.

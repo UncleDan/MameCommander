@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# MameCommander.py by Daniele Lolli (UncleDan) feat. Claude AI - Release 1.2 - 2026-11-08 23-15-30
+# MameCommander.py by Daniele Lolli (UncleDan) feat. Claude AI - Release 1.3 - 2026-11-08 23-20-33
 #
 # MameCommander - frontend per MAME in stile Norton Commander
 # Copyright (c) 2026 Daniele Lolli
@@ -72,7 +72,7 @@ Licenza: MIT (vedi il file LICENSE distribuito insieme a questo file).
 """
 
 APP_NAME = "MameCommander"
-APP_VERSION = "1.2"
+APP_VERSION = "1.3"
 
 import configparser
 import curses
@@ -522,6 +522,19 @@ class Game:
         if self.override is None or self.is_permanently_blocked:
             return False
         return self.override == self.is_playable
+
+    @property
+    def block_reason_auto(self) -> str:
+        """Perche' la voce sarebbe esclusa SENZA forzature manuali, cioe'
+        il giudizio della verifica. Serve quando la si sblocca a forza, per
+        dire cosa si sta scavalcando."""
+        if not self.runnable:
+            return "non riconosciuto"
+        if self.rom_status == "bad":
+            return "incompleto o corrotto"
+        if self.rom_status == "not supported":
+            return "non supportato"
+        return f"non utilizzabile ({self.rom_status})"
 
     @property
     def block_reason(self) -> str:
@@ -1152,15 +1165,17 @@ def build_game_list(rom_names: List[str], progress_cb=None) -> Tuple[List[Game],
 #                             updated_at.<motore>    data dell'ultima scansione
 #   games_mame              cache dei giochi verificati con mame.exe
 #   games_retroarch         cache dei giochi per RetroArch + MAME 2003-Plus
-#   overrides(name, override)  forzature manuali F7, COMUNI a tutti i motori
+#   overrides(engine, name, override)  forzature manuali F7, PER MOTORE
 #
 # Una cache per motore evita di dover riscansionare tutto a ogni cambio
 # con F9 (con MAME 0.78b, che va interrogato una ROM alla volta, sarebbero
-# minuti). Le forzature F7 invece sono condivise: sono scelte dell'utente
-# sul gioco, non giudizi di un particolare emulatore.
+# minuti). Anche le forzature F7 sono per motore: lo stesso romset puo'
+# funzionare con un emulatore e non con l'altro (per esempio un set
+# aggiornato da MAME 2003-Plus che MAME 0.78b non riconosce piu'), quindi
+# sbloccarlo o bloccarlo per uno non deve toccare l'altro.
 
 ENGINE_KINDS = ("mame", "retroarch")
-_SCHEMA = "3"
+_SCHEMA = "4"
 
 
 def _tabella_giochi(kind: str) -> str:
@@ -1206,7 +1221,13 @@ def _migra_schema_vecchio(conn: sqlite3.Connection) -> None:
         forz = [(n, 1) for (n,) in cur.execute("SELECT name FROM games WHERE blocked = 1").fetchall()]
     else:
         forz = []
-    cur.executemany("INSERT OR REPLACE INTO overrides (name, override) VALUES (?, ?)", forz)
+    # Nelle versioni precedenti le forzature valevano per qualunque motore:
+    # le copiamo su entrambi, cosi' dopo l'aggiornamento non cambia nulla.
+    # Da qui in avanti ciascuna si potra' modificare indipendentemente.
+    cur.executemany(
+        "INSERT OR REPLACE INTO overrides (engine, name, override) VALUES (?, ?, ?)",
+        [(k, n, o) for k in ENGINE_KINDS for n, o in forz],
+    )
 
     for chiave, valore in (
         (f"version.{kind}", meta.get("mame_version")),
@@ -1232,7 +1253,24 @@ def _apri_db(db_path: str) -> sqlite3.Connection:
             "rom_status TEXT NOT NULL DEFAULT 'good', runnable INTEGER NOT NULL DEFAULT 1, "
             "is_bios INTEGER NOT NULL DEFAULT 0, is_device INTEGER NOT NULL DEFAULT 0)"
         )
-    cur.execute("CREATE TABLE IF NOT EXISTS overrides (name TEXT PRIMARY KEY, override INTEGER NOT NULL)")
+    colonne_forz = {r[1] for r in cur.execute("PRAGMA table_info(overrides)").fetchall()}
+    if colonne_forz and "engine" not in colonne_forz:
+        # Schema 3 (versione 1.2): forzature comuni a tutti i motori.
+        # Stessa logica della migrazione piu' vecchia: si copiano su entrambi.
+        cur.execute("ALTER TABLE overrides RENAME TO overrides_condivise")
+        colonne_forz = set()
+    cur.execute(
+        "CREATE TABLE IF NOT EXISTS overrides ("
+        "engine TEXT NOT NULL, name TEXT NOT NULL, override INTEGER NOT NULL, "
+        "PRIMARY KEY (engine, name))"
+    )
+    if cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='overrides_condivise'").fetchone():
+        vecchie = cur.execute("SELECT name, override FROM overrides_condivise").fetchall()
+        cur.executemany(
+            "INSERT OR REPLACE INTO overrides (engine, name, override) VALUES (?, ?, ?)",
+            [(k, n, o) for k in ENGINE_KINDS for n, o in vecchie],
+        )
+        cur.execute("DROP TABLE overrides_condivise")
     if cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='games'").fetchone():
         _migra_schema_vecchio(conn)
     cur.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema', ?)", (_SCHEMA,))
@@ -1267,11 +1305,14 @@ def _set_meta(db_path: str, chiave: str, valore: str) -> bool:
         return False
 
 
-def _carica_forzature(conn: sqlite3.Connection) -> Dict[str, bool]:
-    return {n: bool(o) for n, o in conn.execute("SELECT name, override FROM overrides").fetchall()}
+def _carica_forzature(conn: sqlite3.Connection, kind: str) -> Dict[str, bool]:
+    return {
+        n: bool(o)
+        for n, o in conn.execute("SELECT name, override FROM overrides WHERE engine = ?", (kind,)).fetchall()
+    }
 
 
-def apply_overrides(db_path: str, games: List[Game]) -> None:
+def apply_overrides(db_path: str, games: List[Game], kind: str) -> None:
     """Applica ai giochi le forzature F7 salvate. Si usa dopo ogni
     scansione: i giochi appena verificati non sanno nulla delle scelte
     dell'utente, che stanno in una tabella a parte."""
@@ -1280,7 +1321,7 @@ def apply_overrides(db_path: str, games: List[Game]) -> None:
     try:
         conn = _apri_db(db_path)
         try:
-            forz = _carica_forzature(conn)
+            forz = _carica_forzature(conn, kind)
         finally:
             conn.close()
     except sqlite3.Error:
@@ -1304,7 +1345,7 @@ def load_cache_from_db(db_path: str, kind: str) -> Optional[Tuple[List[Game], st
             ).fetchall()
             if not righe:
                 return None
-            forz = _carica_forzature(conn)
+            forz = _carica_forzature(conn, kind)
             meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
         finally:
             conn.close()
@@ -1370,18 +1411,18 @@ def set_selected_engine(db_path: str, kind: str) -> bool:
     return _set_meta(db_path, "selected_engine", kind)
 
 
-def set_override_in_db(db_path: str, name: str, override: Optional[bool]) -> bool:
-    """Salva la forzatura F7 di un gioco, valida per tutti i motori.
-    None la rimuove (si torna al giudizio automatico)."""
+def set_override_in_db(db_path: str, kind: str, name: str, override: Optional[bool]) -> bool:
+    """Salva la forzatura F7 di un gioco per il SOLO motore indicato.
+    None la rimuove (si torna al giudizio automatico di quel motore)."""
     try:
         conn = _apri_db(db_path)
         try:
             if override is None:
-                conn.execute("DELETE FROM overrides WHERE name = ?", (name,))
+                conn.execute("DELETE FROM overrides WHERE engine = ? AND name = ?", (kind, name))
             else:
                 conn.execute(
-                    "INSERT OR REPLACE INTO overrides (name, override) VALUES (?, ?)",
-                    (name, int(override)),
+                    "INSERT OR REPLACE INTO overrides (engine, name, override) VALUES (?, ?, ?)",
+                    (kind, name, int(override)),
                 )
             conn.commit()
             return True
@@ -1624,7 +1665,7 @@ class App:
         vuole_bloccare = game.is_selectable
         stato_voluto = not vuole_bloccare  # True = deve diventare selezionabile
 
-        # Se lo stato voluto coincide gia' con il giudizio di MAME non serve
+        # Se lo stato voluto coincide gia' con il giudizio della verifica non serve
         # memorizzare nessuna forzatura: si torna allo stato automatico,
         # cosi' una futura riscansione potra' aggiornarlo liberamente.
         if stato_voluto == game.is_playable:
@@ -1632,24 +1673,27 @@ class App:
         else:
             game.override = not stato_voluto
 
-        salvato = set_override_in_db(DB_PATH, game.name, game.override)
+        salvato = set_override_in_db(DB_PATH, self.engine.kind, game.name, game.override)
 
+        # Si specifica sempre il motore: la stessa voce con l'altro motore
+        # resta com'era, e senza dirlo sembrerebbe un comportamento
+        # incoerente passando da uno all'altro con F9.
+        motore = "MAME" if self.engine.kind == "mame" else "RetroArch"
         if vuole_bloccare:
-            azione = "bloccato"
+            esito = f"bloccato per {motore}"
         elif not game.is_playable:
-            azione = "sbloccato a forza (MAME lo considera difettoso: l'avvio potrebbe fallire)"
+            # Il giudizio "difettoso" puo' venire da mame.exe o dal DAT di
+            # MAME 2003-Plus: non si nomina la fonte, si dice cosa comporta.
+            esito = f"sbloccato a forza per {motore}: risulta {game.block_reason_auto}, l'avvio potrebbe fallire"
         else:
-            azione = "sbloccato"
+            esito = f"sbloccato per {motore}"
 
         if salvato:
-            self.message = f"'{game.display_name}' {azione}."
+            self.message = f"'{game.display_name}' {esito}."
         else:
             # Onesti sull'esito: se il database non e' scrivibile la scelta
             # vale solo finche' l'app resta aperta, ed e' bene saperlo.
-            self.message = (
-                f"'{game.display_name}' {azione} "
-                f"(solo per questa sessione: database non aggiornabile)."
-            )
+            self.message = f"'{game.display_name}' {esito} - solo per questa sessione, database non aggiornabile."
 
         # Se la voce non deve piu' essere visibile, la lista si accorcia:
         # teniamo il cursore in una posizione valida.
@@ -1755,7 +1799,7 @@ class App:
             "Invio: avvia il gioco selezionato",
             "F5: cerca solo le ROM nuove (non ritocca quelle gia' in DB)",
             "F6: ricostruisce l'intero database da zero",
-            "F7: blocca / sblocca a mano la voce selezionata",
+            "F7: blocca / sblocca a mano la voce (solo per il motore in uso)",
             "F8: mostra o nasconde le voci non selezionabili",
             "F9: sceglie il motore (MAME oppure RetroArch + MAME 2003-Plus)",
             "F10 / Esc: esci",
@@ -1919,7 +1963,7 @@ def choose_engine(stdscr, engines: Dict[str, Optional[Engine]], current: Optiona
 
         scrivi(y, 2, "Ogni motore ha la sua cache: cambiare non obbliga a riscansionare.",
                curses.color_pair(COLOR_NORMAL))
-        scrivi(y + 1, 2, "Le voci bloccate o sbloccate con F7 valgono per entrambi.",
+        scrivi(y + 1, 2, "I blocchi F7 valgono solo per il motore in cui li imposti.",
                curses.color_pair(COLOR_NORMAL))
         scrivi(h - 1, 0, " Frecce Scegli  Invio Conferma  Esc Annulla ".ljust(w),
                curses.color_pair(COLOR_FUNCKEYS))
@@ -1972,9 +2016,9 @@ def scan_and_cache(stdscr, roms_dir: str, engine: Engine) -> Tuple[List[Game], s
 
     games, mame_version, fonte = build_game_list_for(engine, rom_names, roms_dir, progress_cb)
 
-    # Le forzature F7 stanno in una tabella a parte, comune a tutti i
-    # motori: si riapplicano qui ai giochi appena verificati.
-    apply_overrides(DB_PATH, games)
+    # Le forzature F7 di questo motore stanno in una tabella a parte: si
+    # riapplicano qui ai giochi appena verificati.
+    apply_overrides(DB_PATH, games, engine.kind)
 
     if games:
         # Non salviamo una scansione vuota: meglio ritentare al prossimo
@@ -2019,7 +2063,7 @@ def scan_new_only(
     if not new_games:
         return existing_games, existing_version, 0
 
-    apply_overrides(DB_PATH, new_games)
+    apply_overrides(DB_PATH, new_games, engine.kind)
     merged = existing_games + new_games
     merged.sort(key=lambda g: g.display_name.lower())
     draw_progress(stdscr, "Aggiornamento database...")
