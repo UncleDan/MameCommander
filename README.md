@@ -1,4 +1,4 @@
-# MameCommander 1.1
+# MameCommander 1.2
 
 Frontend testuale per MAME, in stile Norton Commander.
 
@@ -119,20 +119,36 @@ Il programma non si blocca, ma ripiega in quest'ordine:
 2. **Nessuna fonte** → elenca i file per nome, tutti avviabili e marcati
    `?`. Funziona, ma senza titoli e senza poter riconoscere i BIOS.
 
-Il titolo della finestra dice sempre quale fonte e' in uso.
+Il titolo della finestra dice sempre quale fonte e' in uso. Se il DAT
+viene aggiunto in un secondo momento, al primo avvio la cache di RetroArch
+si ricostruisce da sola, perche' era stata calcolata con un'altra fonte.
 
-### Se ci sono sia mame.exe sia RetroArch
+### Scelta del motore: tasto F9
 
-Senza indicazioni vince `mame.exe`, che e' il comportamento storico del
-programma. Per usare RetroArch:
+Non c'e' **nessuna precedenza** fra MAME e RetroArch: il motore lo scegli
+tu, e la scelta viene ricordata fra un avvio e l'altro.
 
-- in `MameCommander.ini`: `engine = retroarch`
-- oppure da riga di comando: `MameCommander.exe -engine retroarch`
-  (ha la precedenza sul file; comoda nel campo `Parameters` di X-Launcher)
+- **Al primo avvio**, se sono presenti entrambi, il programma chiede quale
+  usare. Se ce n'e' uno solo, usa quello senza chiedere.
+- **F9** apre in qualsiasi momento la schermata di scelta. Elenca sempre
+  entrambi i motori, anche quello non trovato, con il motivo (per esempio
+  manca il core): cosi' si capisce subito cosa manca.
+- **Ogni motore ha la sua cache.** Cambiare con F9 non obbliga a
+  riscansionare: la prima volta che si usa un motore lo si scansiona, poi
+  passare dall'uno all'altro e' immediato. Con MAME 0.78b, che va
+  interrogato una ROM alla volta, fa una differenza di minuti.
+- **Le scelte fatte con F7 valgono per entrambi i motori.** Bloccare o
+  sbloccare un gioco e' una decisione tua sul gioco, non un giudizio di un
+  particolare emulatore.
 
-Cambiando motore, o aggiungendo il DAT in un secondo momento, la cache
-viene ricostruita automaticamente al primo avvio: era stata calcolata con
-criteri diversi. Le scelte fatte con F7 vengono conservate.
+Se il motore scelto l'ultima volta non c'e' piu' (per esempio hai tolto
+RetroArch), il programma usa l'altro, se disponibile, senza errori.
+
+**Motore imposto.** Con `-engine mame` o `-engine retroarch` da riga di
+comando, oppure con `engine =` in `MameCommander.ini`, il motore e' fisso
+e F9 lo dice invece di aprire la scelta. Serve per esempio a preparare
+due avviatori X-Launcher distinti, uno per motore. Senza questi parametri
+vale sempre la scelta fatta con F9.
 
 ### Limiti
 

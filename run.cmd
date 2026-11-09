@@ -1,4 +1,4 @@
-@REM run.cmd by Daniele Lolli (UncleDan) feat. Claude AI - Release 1.1 - 2026-11-08 23-02-40
+@REM run.cmd by Daniele Lolli (UncleDan) feat. Claude AI - Release 1.2 - 2026-11-08 23-15-30
 @echo off
 REM
 REM  MameCommander - Copyright (c) 2026 Daniele Lolli

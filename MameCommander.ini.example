@@ -6,9 +6,10 @@
 ; RetroArch con il core MAME 2003-Plus.
 ;
 ; Serve in due casi:
-;   - sono presenti SIA mame.exe SIA RetroArch e si vuole scegliere quale
-;     usare (senza configurazione vince mame.exe);
-;   - i file stanno in posizioni che il programma non controlla da solo.
+;   - i file stanno in posizioni che il programma non controlla da solo;
+;   - si vuole IMPORRE un motore, per esempio per avere due avviatori
+;     distinti. Di norma non serve: il motore si sceglie con F9 dentro il
+;     programma, e la scelta viene ricordata.
 ;
 ; Per usarlo: copialo accanto a MameCommander.exe con il nome
 ; MameCommander.ini e togli il punto e virgola dalle righe che ti servono.
@@ -24,12 +25,14 @@
 [MameCommander]
 
 ; Motore da usare per avviare i giochi:
-;   auto       (predefinito) mame.exe se c'e', altrimenti RetroArch
-;   mame       sempre mame.exe
-;   retroarch  sempre RetroArch con il core MAME 2003-Plus
-; Si puo' impostare anche da riga di comando con -engine, che ha la
-; precedenza su questo file (comodo nel campo Parameters di X-Launcher).
-;engine = retroarch
+;   auto       (predefinito) nessuna imposizione: vale la scelta fatta con
+;              F9, ricordata fra un avvio e l'altro. Al primo avvio, se
+;              ci sono entrambi i motori, il programma chiede quale usare.
+;   mame       sempre mame.exe; F9 non lo cambia
+;   retroarch  sempre RetroArch con il core MAME 2003-Plus; F9 non lo cambia
+; Si puo' impostare anche da riga di comando con -engine, che prevale su
+; questo file (comodo nel campo Parameters di X-Launcher).
+;engine = auto
 
 ; RetroArch: si puo' indicare l'eseguibile oppure la sua cartella.
 ; Se omesso viene cercato accanto al programma, in una sottocartella

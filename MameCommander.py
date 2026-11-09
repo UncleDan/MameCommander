@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# MameCommander.py by Daniele Lolli (UncleDan) feat. Claude AI - Release 1.1 - 2026-11-08 23-02-40
+# MameCommander.py by Daniele Lolli (UncleDan) feat. Claude AI - Release 1.2 - 2026-11-08 23-15-30
 #
 # MameCommander - frontend per MAME in stile Norton Commander
 # Copyright (c) 2026 Daniele Lolli
@@ -72,7 +72,7 @@ Licenza: MIT (vedi il file LICENSE distribuito insieme a questo file).
 """
 
 APP_NAME = "MameCommander"
-APP_VERSION = "1.1"
+APP_VERSION = "1.2"
 
 import configparser
 import curses
@@ -322,33 +322,37 @@ def find_retroarch() -> Optional[Engine]:
     return Engine(kind="retroarch", exe=exe, workdir=ra_dir, core=core)
 
 
-def select_engine() -> Tuple[Optional[Engine], str]:
-    """Sceglie il motore. Ritorna (motore, spiegazione_se_assente).
+def available_engines() -> Dict[str, Optional[Engine]]:
+    """Tutti i motori presenti sul sistema, senza alcuna precedenza fra
+    loro: quale usare lo decide l'utente (F9), non il programma."""
+    return {
+        "mame": Engine(kind="mame", exe=MAME_EXE, workdir=APP_DIR) if MAME_EXE else None,
+        "retroarch": find_retroarch(),
+    }
 
-    Con engine=auto (predefinito) si preferisce mame.exe se presente,
-    perche' e' il comportamento storico del programma e permette la
-    verifica dei romset senza file aggiuntivi; altrimenti si usa
-    RetroArch. Per forzare RetroArch quando ci sono entrambi basta
-    engine=retroarch in MameCommander.ini o -engine retroarch.
-    """
+
+def forced_engine_kind() -> Tuple[Optional[str], str]:
+    """Motore imposto da -engine o da MameCommander.ini. Ritorna
+    (motore, errore). "auto" o nessun valore = nessuna imposizione: si usa
+    la scelta fatta con F9."""
     scelta = CONFIG.get("engine", "auto")
-    if scelta not in ("auto", "mame", "retroarch"):
+    if scelta == "auto":
+        return None, ""
+    if scelta not in ENGINE_KINDS:
         return None, f"valore di 'engine' non valido: '{scelta}' (usare auto, mame o retroarch)"
+    return scelta, ""
 
-    if scelta in ("auto", "mame") and MAME_EXE:
-        return Engine(kind="mame", exe=MAME_EXE, workdir=APP_DIR), ""
-    if scelta == "mame":
-        return None, "e' stato richiesto MAME, ma l'eseguibile non e' stato trovato"
 
-    ra = find_retroarch()
-    if ra:
-        return ra, ""
-    if scelta == "retroarch":
-        return None, (
-            "e' stato richiesto RetroArch, ma non sono stati trovati sia "
-            f"l'eseguibile sia il core {CORE_FILE_NAME}"
-        )
-    return None, "non sono stati trovati ne' MAME ne' RetroArch con il core MAME 2003-Plus"
+ENGINE_DESCRIPTIONS = {
+    "mame": "MAME (mame.exe)",
+    "retroarch": "MAME 2003-Plus (RetroArch)",
+}
+
+
+def engine_missing_reason(kind: str) -> str:
+    if kind == "mame":
+        return f"non trovato ({' o '.join(MAME_EXE_CANDIDATES)} accanto al programma o nel PATH)"
+    return f"non trovato (servono retroarch e il core {CORE_FILE_NAME})"
 
 
 def find_dat(engine: Engine, roms_dir: Optional[str]) -> Optional[str]:
@@ -1138,210 +1142,123 @@ def build_game_list(rom_names: List[str], progress_cb=None) -> Tuple[List[Game],
 # Cache su SQLite (MameCommander.db, nella cartella dell'eseguibile)
 # --------------------------------------------------------------------------
 
-def load_cache_from_db(db_path: str) -> Optional[Tuple[List[Game], str]]:
-    """Se il database esiste ed e' leggibile, ritorna (giochi, versione_mame).
-    Altrimenti ritorna None (nessuna cache utilizzabile).
+# Struttura del database (schema 3):
+#
+#   meta(key, value)        impostazioni globali e dati per motore:
+#                             show_blocked           preferenza F8
+#                             selected_engine        motore scelto con F9
+#                             version.<motore>       versione rilevata
+#                             sig.<motore>           firma della fonte
+#                             updated_at.<motore>    data dell'ultima scansione
+#   games_mame              cache dei giochi verificati con mame.exe
+#   games_retroarch         cache dei giochi per RetroArch + MAME 2003-Plus
+#   overrides(name, override)  forzature manuali F7, COMUNI a tutti i motori
+#
+# Una cache per motore evita di dover riscansionare tutto a ogni cambio
+# con F9 (con MAME 0.78b, che va interrogato una ROM alla volta, sarebbero
+# minuti). Le forzature F7 invece sono condivise: sono scelte dell'utente
+# sul gioco, non giudizi di un particolare emulatore.
 
-    Gestisce anche i database creati dalle versioni precedenti, che avevano
-    solo le colonne name/description: le colonne mancanti prendono valori
-    predefiniti sensati, cosi' l'aggiornamento non obbliga a rifare la
-    scansione da zero.
-    """
+ENGINE_KINDS = ("mame", "retroarch")
+_SCHEMA = "3"
+
+
+def _tabella_giochi(kind: str) -> str:
+    if kind not in ENGINE_KINDS:
+        raise ValueError(f"motore sconosciuto: {kind}")
+    return f"games_{kind}"
+
+
+def _migra_schema_vecchio(conn: sqlite3.Connection) -> None:
+    """Converte un database delle versioni 1.0/1.1 (un'unica tabella
+    "games" con le forzature dentro) nello schema per motore, senza perdere
+    ne' la cache ne' le scelte fatte con F7."""
+    cur = conn.cursor()
+    cur.execute("PRAGMA table_info(games)")
+    colonne = {r[1] for r in cur.fetchall()}
+    if not colonne:
+        return
+
+    meta = dict(cur.execute("SELECT key, value FROM meta").fetchall())
+    # In 1.1 "engine" conteneva la firma (es. "retroarch:dat"); in 1.0 non
+    # c'era, e la cache era sempre calcolata con mame.exe.
+    firma = meta.get("engine") or "mame:mame"
+    kind = firma.split(":", 1)[0] if firma.split(":", 1)[0] in ENGINE_KINDS else "mame"
+
+    def col(nome, predefinito):
+        return nome if nome in colonne else predefinito
+
+    QUOTED_GOOD = "'good'"   # valore SQL letterale per i DB senza rom_status
+
+    righe = cur.execute(
+        f"SELECT name, description, {col('rom_status', QUOTED_GOOD)}, "
+        f"{col('runnable', '1')}, {col('is_bios', '0')}, {col('is_device', '0')} FROM games"
+    ).fetchall()
+    cur.executemany(
+        f"INSERT OR REPLACE INTO {_tabella_giochi(kind)} "
+        "(name, description, rom_status, runnable, is_bios, is_device) VALUES (?, ?, ?, ?, ?, ?)",
+        righe,
+    )
+
+    if "override" in colonne:
+        forz = cur.execute("SELECT name, override FROM games WHERE override IS NOT NULL").fetchall()
+    elif "blocked" in colonne:
+        forz = [(n, 1) for (n,) in cur.execute("SELECT name FROM games WHERE blocked = 1").fetchall()]
+    else:
+        forz = []
+    cur.executemany("INSERT OR REPLACE INTO overrides (name, override) VALUES (?, ?)", forz)
+
+    for chiave, valore in (
+        (f"version.{kind}", meta.get("mame_version")),
+        (f"sig.{kind}", firma),
+        (f"updated_at.{kind}", meta.get("updated_at")),
+    ):
+        if valore:
+            cur.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (chiave, valore))
+    cur.execute("DELETE FROM meta WHERE key IN ('mame_version', 'updated_at', 'engine')")
+    cur.execute("DROP TABLE games")
+
+
+def _apri_db(db_path: str) -> sqlite3.Connection:
+    """Apre il database creando le tabelle mancanti e migrando, se serve,
+    quello di una versione precedente."""
+    conn = sqlite3.connect(db_path)
+    cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+    for kind in ENGINE_KINDS:
+        cur.execute(
+            f"CREATE TABLE IF NOT EXISTS {_tabella_giochi(kind)} ("
+            "name TEXT PRIMARY KEY, description TEXT NOT NULL, "
+            "rom_status TEXT NOT NULL DEFAULT 'good', runnable INTEGER NOT NULL DEFAULT 1, "
+            "is_bios INTEGER NOT NULL DEFAULT 0, is_device INTEGER NOT NULL DEFAULT 0)"
+        )
+    cur.execute("CREATE TABLE IF NOT EXISTS overrides (name TEXT PRIMARY KEY, override INTEGER NOT NULL)")
+    if cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='games'").fetchone():
+        _migra_schema_vecchio(conn)
+    cur.execute("INSERT OR REPLACE INTO meta (key, value) VALUES ('schema', ?)", (_SCHEMA,))
+    conn.commit()
+    return conn
+
+
+def _get_meta(db_path: str, chiave: str) -> Optional[str]:
     if not os.path.isfile(db_path):
         return None
     try:
-        conn = sqlite3.connect(db_path)
+        conn = _apri_db(db_path)
         try:
-            cur = conn.cursor()
-
-            cur.execute("PRAGMA table_info(games)")
-            colonne = {r[1] for r in cur.fetchall()}
-            if not colonne:
-                return None
-            # Colonne presenti solo dalle versioni piu' recenti: quelle
-            # mancanti prendono un default sensato.
-            campi = ["name", "description"]
-            for opzionale in ("rom_status", "runnable", "is_bios", "is_device", "override"):
-                if opzionale in colonne:
-                    campi.append(opzionale)
-            # Compatibilita' col formato intermedio, che aveva "blocked"
-            # booleano al posto di "override" a tre stati.
-            ha_vecchio_blocked = "blocked" in colonne and "override" not in colonne
-            if ha_vecchio_blocked:
-                campi.append("blocked")
-
-            cur.execute(
-                f"SELECT {', '.join(campi)} FROM games ORDER BY description COLLATE NOCASE"
-            )
-            games = []
-            for row in cur.fetchall():
-                valori = dict(zip(campi, row))
-
-                if ha_vecchio_blocked:
-                    # "blocked=1" significava un blocco manuale esplicito;
-                    # "blocked=0" non significava nulla di forzato.
-                    override = True if valori.get("blocked") else None
-                else:
-                    grezzo = valori.get("override")
-                    override = None if grezzo is None else bool(grezzo)
-
-                games.append(
-                    Game(
-                        name=valori["name"],
-                        description=valori["description"],
-                        is_bios=bool(valori.get("is_bios", 0)),
-                        is_device=bool(valori.get("is_device", 0)),
-                        # Nei database piu' vecchi erano salvati solo i
-                        # giochi gia' filtrati come avviabili: il default
-                        # corretto e' quindi "integro".
-                        runnable=bool(valori.get("runnable", 1)),
-                        rom_status=valori.get("rom_status", "good"),
-                        override=override,
-                    )
-                )
-
-            mame_version = "sconosciuta"
-            try:
-                cur.execute("SELECT value FROM meta WHERE key = 'mame_version'")
-                row = cur.fetchone()
-                if row and row[0]:
-                    mame_version = row[0]
-            except sqlite3.Error:
-                pass
-            return games, mame_version
+            row = conn.execute("SELECT value FROM meta WHERE key = ?", (chiave,)).fetchone()
+            return row[0] if row and row[0] is not None else None
         finally:
             conn.close()
     except sqlite3.Error:
         return None
 
 
-def save_cache_to_db(
-    db_path: str,
-    games: List[Game],
-    mame_version: str,
-    show_blocked: Optional[bool] = None,
-    engine_sig: Optional[str] = None,
-):
-    """Riscrive interamente MameCommander.db con l'elenco delle voci trovate
-    (comprese quelle non selezionabili) e la versione di MAME rilevata.
-    Non blocca l'app in caso di errore.
-
-    show_blocked va passato perche' questa funzione ricrea il database da
-    zero: senza, la preferenza "mostra/nascondi non selezionabili" verrebbe
-    azzerata a ogni riscansione, che e' proprio quello che non vogliamo.
-    """
+def _set_meta(db_path: str, chiave: str, valore: str) -> bool:
     try:
-        if os.path.exists(db_path):
-            os.remove(db_path)
-        conn = sqlite3.connect(db_path)
+        conn = _apri_db(db_path)
         try:
-            cur = conn.cursor()
-            cur.execute(
-                "CREATE TABLE games ("
-                "name TEXT PRIMARY KEY, "
-                "description TEXT NOT NULL, "
-                "rom_status TEXT NOT NULL DEFAULT 'good', "
-                "runnable INTEGER NOT NULL DEFAULT 1, "
-                "is_bios INTEGER NOT NULL DEFAULT 0, "
-                "is_device INTEGER NOT NULL DEFAULT 0, "
-                # NULL = nessuna forzatura manuale; 1 = bloccato a mano;
-                # 0 = sbloccato a mano. Deve ammettere NULL, altrimenti si
-                # perderebbe la distinzione fra "non forzato" e "forzato a
-                # sbloccato".
-                "override INTEGER)"
-            )
-            cur.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
-            cur.executemany(
-                "INSERT INTO games (name, description, rom_status, runnable, "
-                "is_bios, is_device, override) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [
-                    (
-                        g.name,
-                        g.description,
-                        g.rom_status,
-                        int(g.runnable),
-                        int(g.is_bios),
-                        int(g.is_device),
-                        None if g.override is None else int(g.override),
-                    )
-                    for g in games
-                ],
-            )
-            cur.execute("INSERT INTO meta (key, value) VALUES ('mame_version', ?)", (mame_version or "sconosciuta",))
-            cur.execute(
-                "INSERT INTO meta (key, value) VALUES ('updated_at', ?)",
-                (time.strftime("%Y-%m-%d %H:%M:%S"),),
-            )
-            if show_blocked is not None:
-                cur.execute(
-                    "INSERT INTO meta (key, value) VALUES ('show_blocked', ?)",
-                    ("1" if show_blocked else "0",),
-                )
-            if engine_sig:
-                cur.execute(
-                    "INSERT INTO meta (key, value) VALUES ('engine', ?)",
-                    (engine_sig,),
-                )
-            conn.commit()
-        finally:
-            conn.close()
-    except sqlite3.Error:
-        pass  # la cache e' un extra: se fallisce, l'app continua a funzionare
-
-
-def get_cached_engine(db_path: str) -> Optional[str]:
-    """Firma del motore con cui e' stata calcolata la cache (vedi
-    engine_signature). None per i database delle versioni precedenti,
-    che erano sempre calcolati con mame.exe."""
-    if not os.path.isfile(db_path):
-        return None
-    try:
-        conn = sqlite3.connect(db_path)
-        try:
-            row = conn.execute("SELECT value FROM meta WHERE key = 'engine'").fetchone()
-            return row[0] if row and row[0] else None
-        finally:
-            conn.close()
-    except sqlite3.Error:
-        return None
-
-
-def get_show_blocked(db_path: str, default: bool = True) -> bool:
-    """Legge dal database se le voci non selezionabili vanno mostrate.
-    Se il database non esiste o non contiene la preferenza, ritorna il
-    valore predefinito (mostrarle: e' l'impostazione meno sorprendente,
-    perche' rende visibile tutto quello che c'e' nella cartella)."""
-    if not os.path.isfile(db_path):
-        return default
-    try:
-        conn = sqlite3.connect(db_path)
-        try:
-            cur = conn.cursor()
-            cur.execute("SELECT value FROM meta WHERE key = 'show_blocked'")
-            row = cur.fetchone()
-            if row and row[0] is not None:
-                return row[0] == "1"
-            return default
-        finally:
-            conn.close()
-    except sqlite3.Error:
-        return default
-
-
-def set_show_blocked_in_db(db_path: str, show_blocked: bool) -> bool:
-    """Salva la preferenza mostra/nascondi non selezionabili (tasto F8),
-    cosi' l'elenco si ripresenta come lo si e' lasciato dopo aver chiuso e
-    riaperto l'app."""
-    if not os.path.isfile(db_path):
-        return False
-    try:
-        conn = sqlite3.connect(db_path)
-        try:
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT OR REPLACE INTO meta (key, value) VALUES ('show_blocked', ?)",
-                ("1" if show_blocked else "0",),
-            )
+            conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (chiave, valore))
             conn.commit()
             return True
         finally:
@@ -1350,33 +1267,124 @@ def set_show_blocked_in_db(db_path: str, show_blocked: bool) -> bool:
         return False
 
 
-def set_override_in_db(db_path: str, name: str, override: Optional[bool]) -> bool:
-    """Aggiorna nel database la forzatura manuale di UN solo gioco (F7).
-    Riscrivere tutto il database a ogni pressione sarebbe inutilmente
-    costoso. Ritorna True se il salvataggio e' riuscito: l'interfaccia lo
-    segnala, cosi' l'utente sa se la scelta durera' anche al riavvio."""
+def _carica_forzature(conn: sqlite3.Connection) -> Dict[str, bool]:
+    return {n: bool(o) for n, o in conn.execute("SELECT name, override FROM overrides").fetchall()}
+
+
+def apply_overrides(db_path: str, games: List[Game]) -> None:
+    """Applica ai giochi le forzature F7 salvate. Si usa dopo ogni
+    scansione: i giochi appena verificati non sanno nulla delle scelte
+    dell'utente, che stanno in una tabella a parte."""
     if not os.path.isfile(db_path):
-        return False
+        return
     try:
-        conn = sqlite3.connect(db_path)
+        conn = _apri_db(db_path)
         try:
-            cur = conn.cursor()
-            cur.execute("PRAGMA table_info(games)")
-            colonne = {r[1] for r in cur.fetchall()}
-            if "override" not in colonne:
-                # Database creato da una versione precedente: aggiungiamo la
-                # colonna al volo, senza perdere quanto gia' scansionato.
-                cur.execute("ALTER TABLE games ADD COLUMN override INTEGER")
-                if "blocked" in colonne:
-                    # Travasiamo i vecchi blocchi booleani nel nuovo campo,
-                    # cosi' non vanno persi passando di versione.
-                    cur.execute("UPDATE games SET override = 1 WHERE blocked = 1")
-            cur.execute(
-                "UPDATE games SET override = ? WHERE name = ?",
-                (None if override is None else int(override), name),
+            forz = _carica_forzature(conn)
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return
+    for g in games:
+        if g.name in forz:
+            g.override = forz[g.name]
+
+
+def load_cache_from_db(db_path: str, kind: str) -> Optional[Tuple[List[Game], str, Optional[str]]]:
+    """Cache del motore indicato: (giochi, versione, firma della fonte),
+    con le forzature F7 gia' applicate. None se non c'e' nulla di usabile."""
+    if not os.path.isfile(db_path):
+        return None
+    try:
+        conn = _apri_db(db_path)
+        try:
+            righe = conn.execute(
+                "SELECT name, description, rom_status, runnable, is_bios, is_device "
+                f"FROM {_tabella_giochi(kind)} ORDER BY description COLLATE NOCASE"
+            ).fetchall()
+            if not righe:
+                return None
+            forz = _carica_forzature(conn)
+            meta = dict(conn.execute("SELECT key, value FROM meta").fetchall())
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+
+    giochi = [
+        Game(
+            name=n, description=d, rom_status=st, runnable=bool(ru),
+            is_bios=bool(bi), is_device=bool(de), override=forz.get(n),
+        )
+        for n, d, st, ru, bi, de in righe
+    ]
+    return giochi, meta.get(f"version.{kind}") or "sconosciuta", meta.get(f"sig.{kind}")
+
+
+def save_cache_to_db(db_path: str, kind: str, games: List[Game], version: str, sig: str) -> bool:
+    """Riscrive la cache del SOLO motore indicato. La cache dell'altro
+    motore, le forzature F7 e le preferenze restano intatte."""
+    try:
+        conn = _apri_db(db_path)
+        try:
+            tab = _tabella_giochi(kind)
+            conn.execute(f"DELETE FROM {tab}")
+            conn.executemany(
+                f"INSERT INTO {tab} (name, description, rom_status, runnable, is_bios, is_device) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                [(g.name, g.description, g.rom_status, int(g.runnable), int(g.is_bios), int(g.is_device))
+                 for g in games],
             )
+            for chiave, valore in (
+                (f"version.{kind}", version or "sconosciuta"),
+                (f"sig.{kind}", sig),
+                (f"updated_at.{kind}", time.strftime("%Y-%m-%d %H:%M:%S")),
+            ):
+                conn.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (chiave, valore))
             conn.commit()
-            return cur.rowcount > 0
+            return True
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False  # la cache e' un extra: se fallisce, l'app continua a funzionare
+
+
+def get_show_blocked(db_path: str, default: bool = True) -> bool:
+    """Preferenza F8. Predefinito: mostrare tutto, l'impostazione meno
+    sorprendente al primo avvio."""
+    v = _get_meta(db_path, "show_blocked")
+    return default if v is None else v == "1"
+
+
+def set_show_blocked_in_db(db_path: str, show_blocked: bool) -> bool:
+    return _set_meta(db_path, "show_blocked", "1" if show_blocked else "0")
+
+
+def get_selected_engine(db_path: str) -> Optional[str]:
+    """Motore scelto l'ultima volta con F9 (o alla prima richiesta)."""
+    v = _get_meta(db_path, "selected_engine")
+    return v if v in ENGINE_KINDS else None
+
+
+def set_selected_engine(db_path: str, kind: str) -> bool:
+    return _set_meta(db_path, "selected_engine", kind)
+
+
+def set_override_in_db(db_path: str, name: str, override: Optional[bool]) -> bool:
+    """Salva la forzatura F7 di un gioco, valida per tutti i motori.
+    None la rimuove (si torna al giudizio automatico)."""
+    try:
+        conn = _apri_db(db_path)
+        try:
+            if override is None:
+                conn.execute("DELETE FROM overrides WHERE name = ?", (name,))
+            else:
+                conn.execute(
+                    "INSERT OR REPLACE INTO overrides (name, override) VALUES (?, ?)",
+                    (name, int(override)),
+                )
+            conn.commit()
+            return True
         finally:
             conn.close()
     except sqlite3.Error:
@@ -1446,12 +1454,16 @@ class App:
         show_blocked: bool = True,
         engine: Optional[Engine] = None,
         roms_dir: Optional[str] = None,
+        engine_lock: str = "",
     ):
         self.stdscr = stdscr
         self.games = games
         self.mame_version = mame_version
         self.engine = engine or Engine(kind="mame", exe=MAME_EXE or "mame", workdir=APP_DIR)
         self.roms_dir = roms_dir
+        # Se non vuoto, il motore e' imposto dall'esterno e F9 mostra questo
+        # messaggio invece di aprire la scelta.
+        self.engine_lock = engine_lock
         # Se mostrare anche le voci non selezionabili (BIOS, ROM difettose,
         # voci bloccate a mano). Si commuta con F8 e viene salvato nel
         # database, cosi' l'elenco si ripresenta come lo si e' lasciato.
@@ -1556,7 +1568,7 @@ class App:
 
         # Barra tasti funzione
         funckeys = (
-            " F1 Aiuto  F5 Nuovi  F6 Ricostr.  F7 Blocca  F8 Mostra/Nascondi  Invio Avvia  F10 Esci "
+            " F1 Aiuto F5 Nuovi F6 Ricostr F7 Blocca F8 Nascondi F9 Motore F10 Esci "
         )
         stdscr.addstr(h - 1, 0, funckeys.ljust(w)[: w - 1], curses.color_pair(COLOR_FUNCKEYS))
 
@@ -1745,6 +1757,7 @@ class App:
             "F6: ricostruisce l'intero database da zero",
             "F7: blocca / sblocca a mano la voce selezionata",
             "F8: mostra o nasconde le voci non selezionabili",
+            "F9: sceglie il motore (MAME oppure RetroArch + MAME 2003-Plus)",
             "F10 / Esc: esci",
             "",
             "Marcatori a inizio riga:",
@@ -1760,8 +1773,8 @@ class App:
             "ma Invio non le avvia.",
             "",
             f"Versione MAME rilevata: {self.mame_version}",
-            f"Motore: {self.engine.label}",
-            "Parametro -engine mame|retroarch per scegliere il motore",
+            f"Motore in uso: {self.engine.label}",
+            "Con -engine mame|retroarch il motore e' imposto e F9 non lo cambia",
             "Avvia con il parametro -debug per generare un log dettagliato",
             "Avvia con -newconsole per aprire MAME in una finestra separata",
             "",
@@ -1846,6 +1859,13 @@ class App:
                 self.toggle_blocked()
             elif ch == curses.KEY_F8:
                 self.toggle_show_blocked()
+            elif ch == curses.KEY_F9:
+                if self.engine_lock:
+                    # Motore imposto da parametro o da MameCommander.ini:
+                    # lo si dice, invece di ignorare il tasto in silenzio.
+                    self.message = self.engine_lock
+                else:
+                    return "switch_engine"
             elif ch in (curses.KEY_F10, 27):  # F10 o Esc
                 return "quit"
             elif ch in (curses.KEY_BACKSPACE, 127, 8):
@@ -1859,6 +1879,65 @@ class App:
 # --------------------------------------------------------------------------
 # Avvio / pipeline principale
 # --------------------------------------------------------------------------
+
+def choose_engine(stdscr, engines: Dict[str, Optional[Engine]], current: Optional[str]) -> Optional[str]:
+    """Schermata di scelta del motore (F9, e al primo avvio se ce ne sono
+    piu' d'uno). Elenca TUTTI i motori, anche quelli non trovati, con il
+    motivo: cosi' si capisce subito cosa manca invece di chiedersi perche'
+    una voce non compare. Ritorna il motore scelto, o None con Esc."""
+    voci = list(ENGINE_KINDS)
+    disponibili = [k for k in voci if engines.get(k)]
+    sel = voci.index(current) if current in voci else voci.index(disponibili[0]) if disponibili else 0
+
+    while True:
+        stdscr.erase()
+        stdscr.bkgd(" ", curses.color_pair(COLOR_NORMAL))
+        h, w = stdscr.getmaxyx()
+
+        def scrivi(y, x, testo, attr):
+            if 0 <= y < h and x < w - 1:
+                stdscr.addstr(y, x, testo[: max(0, w - x - 1)], attr)
+
+        scrivi(0, 0, f" {APP_NAME} {APP_VERSION} - Scelta del motore di emulazione ".ljust(w),
+               curses.color_pair(COLOR_TITLE) | curses.A_BOLD)
+        scrivi(2, 2, "Con quale programma vuoi avviare i giochi?", curses.color_pair(COLOR_NORMAL))
+
+        y = 4
+        for i, kind in enumerate(voci):
+            eng = engines.get(kind)
+            attivo = " (in uso)" if kind == current else ""
+            riga = f" {ENGINE_DESCRIPTIONS[kind]}{attivo}"
+            if eng:
+                dettaglio = eng.exe if kind == "mame" else f"{eng.exe}  +  {os.path.basename(eng.core)}"
+                attr = curses.color_pair(COLOR_SELECTED if i == sel else COLOR_NORMAL)
+            else:
+                dettaglio = engine_missing_reason(kind)
+                attr = curses.color_pair(COLOR_DIMMED_SELECTED if i == sel else COLOR_DIMMED)
+            scrivi(y, 2, riga.ljust(max(0, w - 5)), attr)
+            scrivi(y + 1, 6, dettaglio, curses.color_pair(COLOR_DIMMED))
+            y += 3
+
+        scrivi(y, 2, "Ogni motore ha la sua cache: cambiare non obbliga a riscansionare.",
+               curses.color_pair(COLOR_NORMAL))
+        scrivi(y + 1, 2, "Le voci bloccate o sbloccate con F7 valgono per entrambi.",
+               curses.color_pair(COLOR_NORMAL))
+        scrivi(h - 1, 0, " Frecce Scegli  Invio Conferma  Esc Annulla ".ljust(w),
+               curses.color_pair(COLOR_FUNCKEYS))
+        stdscr.refresh()
+
+        ch = stdscr.getch()
+        if ch == curses.KEY_UP:
+            sel = (sel - 1) % len(voci)
+        elif ch == curses.KEY_DOWN:
+            sel = (sel + 1) % len(voci)
+        elif ch in (10, 13, curses.KEY_ENTER):
+            if engines.get(voci[sel]):
+                return voci[sel]
+            # Voce non disponibile: si resta nella schermata, il motivo e'
+            # gia' scritto sotto la voce.
+        elif ch == 27:
+            return None
+
 
 def draw_info_screen(stdscr, lines: List[str]):
     """Come draw_error_screen ma con i colori normali: per messaggi
@@ -1874,20 +1953,14 @@ def draw_info_screen(stdscr, lines: List[str]):
     stdscr.getch()
 
 
-def scan_and_cache(
-    stdscr,
-    roms_dir: str,
-    engine: Engine,
-    previous_games: Optional[List[Game]] = None,
-    show_blocked: Optional[bool] = None,
-) -> Tuple[List[Game], str]:
+def scan_and_cache(stdscr, roms_dir: str, engine: Engine) -> Tuple[List[Game], str]:
     """RICOSTRUZIONE COMPLETA (tasto F6): rifa' la scansione via mame.exe
     di TUTTE le ROM presenti in ROMS e riscrive da zero la cache
     MameCommander.db. Ritorna (giochi, versione_mame).
 
-    I blocchi manuali (F7) vengono CONSERVATI: sono scelte dell'utente, non
-    dati ricavati dalla scansione, e perderli a ogni ricostruzione sarebbe
-    una sorpresa sgradevole. Per questo si passa l'elenco precedente.
+    Riguarda solo la cache del motore in uso: quella dell'altro motore
+    resta intatta. Le forzature F7 sono conservate, perche' stanno in una
+    tabella separata e vengono riapplicate dopo la scansione.
     """
     def progress_cb(msg):
         draw_progress(stdscr, msg)
@@ -1899,21 +1972,15 @@ def scan_and_cache(
 
     games, mame_version, fonte = build_game_list_for(engine, rom_names, roms_dir, progress_cb)
 
-    if previous_games:
-        # Le forzature manuali (F7) sono scelte dell'utente, non dati
-        # ricavati dalla scansione: vanno conservate in entrambe le
-        # direzioni, sia i blocchi sia gli sblocchi forzati.
-        forzature = {g.name: g.override for g in previous_games if g.override is not None}
-        for g in games:
-            if g.name in forzature:
-                g.override = forzature[g.name]
+    # Le forzature F7 stanno in una tabella a parte, comune a tutti i
+    # motori: si riapplicano qui ai giochi appena verificati.
+    apply_overrides(DB_PATH, games)
 
     if games:
         # Non salviamo una scansione vuota: meglio ritentare al prossimo
         # avvio piuttosto che bloccare l'utente su una cache vuota.
         draw_progress(stdscr, "Aggiornamento database...")
-        save_cache_to_db(DB_PATH, games, mame_version, show_blocked,
-                         engine_sig=engine_signature(engine, fonte))
+        save_cache_to_db(DB_PATH, engine.kind, games, mame_version, engine_signature(engine, fonte))
     return games, mame_version
 
 
@@ -1923,7 +1990,6 @@ def scan_new_only(
     engine: Engine,
     existing_games: List[Game],
     existing_version: str,
-    show_blocked: Optional[bool] = None,
 ) -> Tuple[List[Game], str, int]:
     """RICERCA SOLO NUOVI GIOCHI (tasto F5): confronta i file in ROMS con
     quelli gia' presenti nel database e interroga mame.exe SOLO per i nomi
@@ -1953,11 +2019,11 @@ def scan_new_only(
     if not new_games:
         return existing_games, existing_version, 0
 
+    apply_overrides(DB_PATH, new_games)
     merged = existing_games + new_games
     merged.sort(key=lambda g: g.display_name.lower())
     draw_progress(stdscr, "Aggiornamento database...")
-    save_cache_to_db(DB_PATH, merged, mame_version, show_blocked,
-                     engine_sig=engine_signature(engine, fonte))
+    save_cache_to_db(DB_PATH, engine.kind, merged, mame_version, engine_signature(engine, fonte))
     return merged, mame_version, len(new_games)
 
 
@@ -1983,31 +2049,7 @@ def main(stdscr):
     init_colors()
     curses.curs_set(0)
 
-    # 1. un motore di emulazione disponibile? (MAME o RetroArch + core)
-    engine, motivo = select_engine()
-    if engine is None:
-        draw_error_screen(
-            stdscr,
-            [
-                f"ERRORE: {motivo}.",
-                "",
-                "Servono UNO dei due:",
-                f"  - MAME: {' o '.join(MAME_EXE_CANDIDATES)}, accanto a questo",
-                "    programma oppure raggiungibile dal PATH;",
-                f"  - RetroArch con il core {CORE_FILE_NAME}",
-                "    (nella sottocartella cores di RetroArch).",
-                "",
-                f"Cartella del programma: {APP_DIR}",
-                "RetroArch viene cercato qui, in una sottocartella RetroArch",
-                "e in una cartella RetroArch allo stesso livello.",
-                "",
-                f"Per percorsi diversi crea {APP_NAME}.ini (vedi il file",
-                f"{APP_NAME}.ini.example incluso nel progetto).",
-            ],
-        )
-        return
-
-    # 2. cartella ROMS presente?
+    # 1. cartella delle ROM
     roms_dir = find_roms_dir()
     if roms_dir is None:
         draw_error_screen(
@@ -2024,43 +2066,92 @@ def main(stdscr):
         )
         return
 
-    # 3. Se esiste gia' MameCommander.db, usiamolo (avvio istantaneo, senza
-    #    richiamare mame.exe). Altrimenti facciamo la scansione completa e
-    #    lo creiamo.
-    draw_progress(stdscr, "Verifica database...")
-    # La preferenza "mostra/nascondi non selezionabili" (F8) e' salvata nel
-    # database: la rileggiamo qui, cosi' l'elenco si ripresenta esattamente
-    # come lo si era lasciato alla chiusura precedente.
-    show_blocked = get_show_blocked(DB_PATH)
+    # 2. motore di emulazione. NESSUNA precedenza automatica fra MAME e
+    #    RetroArch: si usa quello imposto (-engine o MameCommander.ini), o
+    #    altrimenti quello scelto l'ultima volta con F9. Se non c'e' ancora
+    #    una scelta e i motori disponibili sono due, lo si chiede.
+    engines = available_engines()
+    imposto, errore = forced_engine_kind()
+    if errore:
+        draw_error_screen(stdscr, [f"ERRORE: {errore}."])
+        return
 
-    # La cache vale solo se e' stata calcolata con lo stesso motore e la
-    # stessa fonte di informazioni di adesso. I database delle versioni
-    # precedenti non hanno la firma: erano sempre calcolati con mame.exe.
-    firma_attuale = engine_signature(engine, info_source(engine, roms_dir))
-    firma_cache = get_cached_engine(DB_PATH) or "mame:mame"
-
-    cached = load_cache_from_db(DB_PATH)
-    if cached is not None and cached[0] and firma_cache == firma_attuale:
-        games, mame_version = cached
+    if imposto:
+        if engines[imposto] is None:
+            draw_error_screen(
+                stdscr,
+                [
+                    f"ERRORE: e' stato imposto il motore '{imposto}',",
+                    f"ma {ENGINE_DESCRIPTIONS[imposto]} risulta {engine_missing_reason(imposto)}.",
+                    "",
+                    f"Controlla il parametro -engine o la voce engine= in {APP_NAME}.ini.",
+                ],
+            )
+            return
+        kind = imposto
+        lock = f"Motore imposto da -engine o {APP_NAME}.ini: F9 non lo cambia."
     else:
-        # Cambio di motore o di fonte: le forzature manuali (F7) si
-        # conservano comunque, sono scelte dell'utente.
-        precedenti = cached[0] if cached else None
-        games, mame_version = scan_and_cache(
-            stdscr, roms_dir, engine, previous_games=precedenti, show_blocked=show_blocked
-        )
+        lock = ""
+        disponibili = [k for k in ENGINE_KINDS if engines[k]]
+        if not disponibili:
+            draw_error_screen(
+                stdscr,
+                [
+                    "ERRORE: non e' stato trovato nessun motore di emulazione.",
+                    "",
+                    "Servono UNO dei due:",
+                    f"  - MAME: {' o '.join(MAME_EXE_CANDIDATES)}, accanto a questo",
+                    "    programma oppure raggiungibile dal PATH;",
+                    f"  - RetroArch con il core {CORE_FILE_NAME}",
+                    "    (nella sottocartella cores di RetroArch).",
+                    "",
+                    f"Cartella del programma: {APP_DIR}",
+                    "RetroArch viene cercato qui, in una sottocartella RetroArch",
+                    "e in una cartella RetroArch allo stesso livello.",
+                    "",
+                    f"Per percorsi diversi crea {APP_NAME}.ini (vedi il file",
+                    f"{APP_NAME}.ini.example incluso nel progetto).",
+                ],
+            )
+            return
+        salvato = get_selected_engine(DB_PATH)
+        if salvato in disponibili:
+            kind = salvato
+        elif len(disponibili) == 1:
+            kind = disponibili[0]
+        else:
+            kind = choose_engine(stdscr, engines, None)
+            if kind is None:
+                return  # Esc alla prima scelta: si esce senza toccare nulla
+        set_selected_engine(DB_PATH, kind)
+
+    show_blocked = get_show_blocked(DB_PATH)
+    da_caricare = True
 
     while True:
+        engine = engines[kind]
+
+        if da_caricare:
+            draw_progress(stdscr, "Verifica database...")
+            # La cache di questo motore vale solo se calcolata con la stessa
+            # fonte di adesso (es. e' stato aggiunto il DAT nel frattempo).
+            firma = engine_signature(engine, info_source(engine, roms_dir))
+            cached = load_cache_from_db(DB_PATH, kind)
+            if cached is not None and cached[2] == firma:
+                games, mame_version = cached[0], cached[1]
+            else:
+                games, mame_version = scan_and_cache(stdscr, roms_dir, engine)
+            da_caricare = False
+
         if not games:
             draw_error_screen(
                 stdscr,
                 [
                     "Nessuna ROM utilizzabile trovata.",
                     "",
-                    "Le ROM difettose ora resterebbero comunque in lista, in",
+                    "Le ROM difettose resterebbero comunque in lista, in",
                     "colore attenuato: se la lista e' del tutto vuota vuol dire",
-                    "che nella cartella non c'e' nessun file .zip/.7z, oppure",
-                    "che contiene solo BIOS e device, che non sono giochi.",
+                    "che nella cartella non c'e' nessun file .zip/.7z.",
                     "",
                     "Avvia con -debug per un log dettagliato della scansione.",
                 ],
@@ -2068,19 +2159,23 @@ def main(stdscr):
             return
 
         app = App(stdscr, games, mame_version, show_blocked=show_blocked,
-                  engine=engine, roms_dir=roms_dir)
+                  engine=engine, roms_dir=roms_dir, engine_lock=lock)
         action = app.run()
-        # L'utente potrebbe aver premuto F8: teniamo il valore aggiornato,
-        # cosi' le riscansioni qui sotto non lo riportano indietro.
+        # F8 e' gia' stato salvato da App; teniamo allineata la copia locale.
         show_blocked = app.show_blocked
 
         if action == "quit":
             return
 
+        elif action == "switch_engine":
+            nuovo = choose_engine(stdscr, engines, kind)
+            if nuovo and nuovo != kind:
+                kind = nuovo
+                set_selected_engine(DB_PATH, kind)
+                da_caricare = True
+
         elif action == "refresh_new":
-            games, mame_version, new_count = scan_new_only(
-                stdscr, roms_dir, engine, games, mame_version, show_blocked=show_blocked
-            )
+            games, mame_version, new_count = scan_new_only(stdscr, roms_dir, engine, games, mame_version)
             if new_count > 0:
                 draw_info_screen(
                     stdscr,
@@ -2090,20 +2185,10 @@ def main(stdscr):
                     ],
                 )
             else:
-                draw_info_screen(
-                    stdscr,
-                    [
-                        "Nessun nuovo gioco trovato.",
-                        "La lista era gia' aggiornata.",
-                    ],
-                )
+                draw_info_screen(stdscr, ["Nessun nuovo gioco trovato.", "La lista era gia' aggiornata."])
 
         elif action == "refresh_full":
-            # Passiamo l'elenco corrente cosi' i blocchi manuali (F7)
-            # sopravvivono alla ricostruzione del database.
-            games, mame_version = scan_and_cache(
-                stdscr, roms_dir, engine, previous_games=games, show_blocked=show_blocked
-            )
+            games, mame_version = scan_and_cache(stdscr, roms_dir, engine)
 
 
 if __name__ == "__main__":
