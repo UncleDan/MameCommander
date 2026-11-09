@@ -44,11 +44,11 @@
 ;core = ..\RetroArch\cores\mame2003_plus_libretro.dll
 
 ; File DAT di MAME 2003-Plus, usato per conoscere i titoli dei giochi e
-; verificare l'integrita' dei romset. Si genera dal core: menu MAME (Tab)
-; -> "Generate XML DAT". Se omesso viene cercato nelle cartelle saves e
-; system di RetroArch (sotto mame2003-plus), nella cartella delle ROM e
-; accanto al programma.
-;dat = ..\RetroArch\saves\mame2003-plus\mame2003-plus.xml
+; verificare l'integrita' dei romset. Si genera dal core: Menu rapido ->
+; Opzioni del core -> Display MAME menu -> "Generate XML DAT".
+; Se omesso viene cercato per primo in saves\MAME 2003-Plus\mame2003-plus
+; di RetroArch (dove lo scrive il core), poi nelle altre posizioni.
+;dat = ..\RetroArch\saves\MAME 2003-Plus\mame2003-plus\mame2003-plus.xml
 
 ; Cartella delle ROM, se non e' la sottocartella "roms" del programma.
 ;roms = D:\Arcade\roms

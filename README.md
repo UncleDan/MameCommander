@@ -1,4 +1,4 @@
-# MameCommander 1.3
+# MameCommander 2.0b1
 
 Frontend testuale per MAME, in stile Norton Commander.
 
@@ -70,7 +70,7 @@ basta. Senza configurazione vengono cercati:
 |---|---|
 | `retroarch.exe` | accanto al programma, nella sottocartella `RetroArch`, in una cartella `RetroArch` allo stesso livello, nel `PATH` |
 | `mame2003_plus_libretro.dll` | nella sottocartella `cores` di RetroArch |
-| `mame2003-plus.xml` (il DAT) | cartelle `saves` e `system` di RetroArch (sotto `mame2003-plus`), cartella delle ROM, accanto al programma |
+| `mame2003-plus.xml` (il DAT) | per primo `saves\MAME 2003-Plus\mame2003-plus\` di RetroArch, poi le altre posizioni (vedi sotto) |
 
 Su Linux i nomi diventano `retroarch` e `mame2003_plus_libretro.so`, e si
 controlla anche `~/.config/retroarch`.
@@ -101,12 +101,36 @@ richiamare `mame.exe` una volta per ogni ROM. Gestisce correttamente i
 set *split* (le ROM condivise di un clone stanno nello zip del padre) e
 i giochi che dipendono da un BIOS, come quelli Neo-Geo.
 
-**Come ottenerlo.** Il core lo genera da se': nelle opzioni del core
-abilita il menu MAME, aprilo (di solito con Tab), scegli *Generate XML
-DAT*, poi disabilita di nuovo il menu. Il file viene scritto nella
-cartella dei salvataggi di RetroArch, sotto `mame2003-plus`. Esiste
-anche una copia nel repository del core su GitHub (cartella `metadata`),
-ma non sempre e' aggiornata: meglio quella generata dal core che usi.
+**Come ottenerlo.** Il core lo genera da se', con un gioco qualsiasi
+avviato: *Menu rapido* (F1) → *Opzioni del core* → *Display MAME menu*
+su *enabled*; torna al gioco e scegli *Generate XML DAT*; poi rimetti
+*Display MAME menu* su *disabled*. Esiste anche una copia nel repository
+del core su GitHub (cartella `metadata`), ma la piu' sicura e' quella
+generata dal core che usi davvero.
+
+**Dove finisce.** Con RetroArch portatile e le impostazioni predefinite
+il core lo scrive in:
+
+```
+RetroArch\saves\MAME 2003-Plus\mame2003-plus\mame2003-plus.xml
+```
+
+La cartella `MAME 2003-Plus` la crea RetroArch, che ordina i salvataggi
+per nome del core; `mame2003-plus` la crea il core stesso. E' il primo
+posto in cui MameCommander guarda. Se non lo trova li', prova
+nell'ordine:
+
+1. le cartelle dei salvataggi e di sistema impostate in `retroarch.cfg`,
+   se le hai cambiate;
+2. `saves\mame2003-plus\` (salvataggi non ordinati per core);
+3. accanto a `MameCommander.exe` e nella cartella delle ROM, se ce l'hai
+   copiato a mano;
+4. una ricerca nelle sottocartelle di `saves` e `system`, per le
+   disposizioni che non ho previsto.
+
+Se ne trova piu' d'uno con la ricerca dell'ultimo passo, usa il piu'
+recente. Per indicarlo esplicitamente c'e' sempre `dat=` in
+`MameCommander.ini`, che ha la precedenza su tutto.
 
 ### Se il DAT manca
 

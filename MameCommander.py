@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# MameCommander.py by Daniele Lolli (UncleDan) feat. Claude AI - Release 1.3 - 2026-11-08 23-20-33
+# MameCommander.py by Daniele Lolli (UncleDan) feat. Claude AI - Release 2.0b1 - 2026-11-09 17-29-12
 #
 # MameCommander - frontend per MAME in stile Norton Commander
 # Copyright (c) 2026 Daniele Lolli
@@ -72,7 +72,7 @@ Licenza: MIT (vedi il file LICENSE distribuito insieme a questo file).
 """
 
 APP_NAME = "MameCommander"
-APP_VERSION = "1.3"
+APP_VERSION = "2.0b1"
 
 import configparser
 import curses
@@ -355,32 +355,114 @@ def engine_missing_reason(kind: str) -> str:
     return f"non trovato (servono retroarch e il core {CORE_FILE_NAME})"
 
 
-def find_dat(engine: Engine, roms_dir: Optional[str]) -> Optional[str]:
-    """Cerca il file DAT di MAME 2003-Plus (mame2003-plus.xml).
+# Nome della cartella che RetroArch crea per i salvataggi del core quando
+# ordina i salvataggi per core (impostazione predefinita). Verificato sul
+# campo: il log di RetroArch riporta GET_SAVE_DIRECTORY = saves\MAME 2003-Plus,
+# e il core vi crea a sua volta la sottocartella mame2003-plus.
+CORE_FOLDER_NAME = "MAME 2003-Plus"
+CORE_SUBFOLDER = "mame2003-plus"
 
-    Il core lo genera dal menu MAME ("Generate XML DAT") e lo salva nella
-    cartella dei salvataggi di RetroArch, sotto mame2003-plus. Una copia
-    si trova anche nel repository del core su GitHub, nella cartella
-    metadata, ma non sempre aggiornata: meglio quella generata dal core
-    che si usa davvero.
+
+def _retroarch_cfg_dirs(ra_dir: str) -> List[str]:
+    """Cartelle dei salvataggi e di sistema impostate in retroarch.cfg, se
+    diverse da quelle predefinite. Un valore che inizia con ":" e' relativo
+    alla cartella di RetroArch (cosi' lo scrive la versione portatile);
+    "default" significa che non e' stato cambiato."""
+    cfg = os.path.join(ra_dir, "retroarch.cfg")
+    cartelle: List[str] = []
+    if not os.path.isfile(cfg):
+        return cartelle
+    try:
+        with open(cfg, "r", encoding="utf-8", errors="ignore") as fh:
+            for riga in fh:
+                m = re.match(r'\s*(savefile_directory|system_directory)\s*=\s*"([^"]*)"', riga)
+                if not m:
+                    continue
+                valore = m.group(2).strip()
+                if not valore or valore.lower() == "default":
+                    continue
+                if valore.startswith(":"):
+                    valore = os.path.join(ra_dir, valore[1:].lstrip("\\/"))
+                cartelle.append(os.path.normpath(os.path.expanduser(valore)))
+    except OSError:
+        pass
+    return cartelle
+
+
+def _cerca_in_profondita(radice: str, profondita: int = 3) -> Optional[str]:
+    """Ultima risorsa: cerca il DAT dentro una cartella fino a qualche
+    livello di profondita'. Copre le altre modalita' di ordinamento dei
+    salvataggi di RetroArch (per cartella dei contenuti, o combinate), senza
+    doverle prevedere una per una."""
+    if not os.path.isdir(radice):
+        return None
+    base = radice.rstrip("\\/").count(os.sep)
+    trovati = []
+    for cartella, sottocartelle, file in os.walk(radice):
+        if cartella.count(os.sep) - base >= profondita:
+            sottocartelle[:] = []
+        if DAT_FILE_NAME in file:
+            trovati.append(os.path.join(cartella, DAT_FILE_NAME))
+    # Se ce n'e' piu' d'uno, vince il piu' recente: e' quello generato per
+    # ultimo, quindi quello che corrisponde al core in uso.
+    return max(trovati, key=os.path.getmtime) if trovati else None
+
+
+def find_dat(engine: Engine, roms_dir: Optional[str]) -> Optional[str]:
+    r"""Cerca il file DAT di MAME 2003-Plus (mame2003-plus.xml).
+
+    Ordine di ricerca, dal piu' affidabile al ripiego:
+      0. la voce dat= di MameCommander.ini, se presente;
+      1. la posizione VERIFICATA dove lo scrive il core con RetroArch
+         portatile: saves\MAME 2003-Plus\mame2003-plus\;
+      2. le cartelle dei salvataggi e di sistema impostate in retroarch.cfg,
+         se l'utente le ha cambiate;
+      3. le posizioni senza la cartella del core (salvataggi non ordinati);
+      4. accanto al programma e nella cartella delle ROM (copia manuale);
+      5. una ricerca in profondita' dentro saves e system di RetroArch.
     """
     configurato = CONFIG.get("dat")
     if configurato:
         return configurato if os.path.isfile(configurato) else None
 
-    candidate = [os.path.join(APP_DIR, DAT_FILE_NAME)]
+    candidate: List[str] = []
     if engine.kind == "retroarch":
-        for sotto in ("saves", "system", "savefiles"):
-            candidate.append(os.path.join(engine.workdir, sotto, "mame2003-plus", DAT_FILE_NAME))
+        ra = engine.workdir
+        # 1. posizione verificata
+        candidate.append(os.path.join(ra, "saves", CORE_FOLDER_NAME, CORE_SUBFOLDER, DAT_FILE_NAME))
+        # 2. cartelle personalizzate in retroarch.cfg
+        for d in _retroarch_cfg_dirs(ra):
+            candidate.append(os.path.join(d, CORE_FOLDER_NAME, CORE_SUBFOLDER, DAT_FILE_NAME))
+            candidate.append(os.path.join(d, CORE_SUBFOLDER, DAT_FILE_NAME))
+        # 3. salvataggi non ordinati per core
+        for sotto in ("saves", "system"):
+            candidate.append(os.path.join(ra, sotto, CORE_SUBFOLDER, DAT_FILE_NAME))
+        candidate.append(os.path.join(ra, "system", CORE_FOLDER_NAME, CORE_SUBFOLDER, DAT_FILE_NAME))
+    # 4. copie manuali
+    candidate.append(os.path.join(APP_DIR, DAT_FILE_NAME))
     if roms_dir:
         candidate += [
             os.path.join(roms_dir, DAT_FILE_NAME),
-            os.path.join(roms_dir, "mame2003-plus", DAT_FILE_NAME),
+            os.path.join(roms_dir, CORE_SUBFOLDER, DAT_FILE_NAME),
         ]
     if os.name != "nt":
         for sotto in ("saves", "system"):
-            candidate.append(os.path.expanduser(f"~/.config/retroarch/{sotto}/mame2003-plus/{DAT_FILE_NAME}"))
-    return next((c for c in candidate if os.path.isfile(c)), None)
+            candidate.append(os.path.expanduser(f"~/.config/retroarch/{sotto}/{CORE_FOLDER_NAME}/{CORE_SUBFOLDER}/{DAT_FILE_NAME}"))
+            candidate.append(os.path.expanduser(f"~/.config/retroarch/{sotto}/{CORE_SUBFOLDER}/{DAT_FILE_NAME}"))
+
+    trovato = next((c for c in candidate if os.path.isfile(c)), None)
+    if trovato:
+        return trovato
+
+    # 5. ricerca in profondita', solo se tutto il resto ha fallito
+    if engine.kind == "retroarch":
+        radici = [os.path.join(engine.workdir, "saves"), os.path.join(engine.workdir, "system")]
+        radici += _retroarch_cfg_dirs(engine.workdir)
+        for r in radici:
+            trovato = _cerca_in_profondita(r)
+            if trovato:
+                return trovato
+    return None
 
 
 def rom_file_path(roms_dir: str, name: str) -> Optional[str]:
